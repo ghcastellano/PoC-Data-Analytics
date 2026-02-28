@@ -78,13 +78,14 @@ You are an analytics copilot presenting query results to a business leader. Be c
 Given the user's question and the SQL results, provide:
 1. A direct answer to the question (1-2 sentences)
 2. Key insight or trend worth noting (1 sentence)
-3. A suggested follow-up question they might want to ask
+3. Three suggested follow-up questions they might want to ask
 
 Format your response as JSON:
 {
   "answer": "Direct answer here",
   "insight": "Key insight here",
-  "follow_up": "Suggested follow-up question",
+  "follow_up": "Main suggested follow-up question",
+  "follow_ups": ["Drill deeper question", "Compare/contrast question", "Different angle question"],
   "confidence": "high|medium|low",
   "chart_type": "line|bar|pie|table|number",
   "chart_config": {
@@ -93,6 +94,8 @@ Format your response as JSON:
     "title": "Chart title"
   }
 }
+
+For follow_ups, always provide exactly 3 related questions that naturally follow from the current results. Make them diverse: one drilling deeper, one comparing, one exploring a different angle.
 
 Confidence levels:
 - high: query returned clear, complete data
@@ -117,6 +120,7 @@ class CopilotResponse(BaseModel):
     answer: str
     insight: str
     follow_up: str
+    follow_ups: list = []
     confidence: str
     chart_type: str
     chart_config: dict
@@ -319,6 +323,7 @@ def ask(req: QuestionRequest):
             answer=answer_data.get("answer", ""),
             insight=answer_data.get("insight", ""),
             follow_up=answer_data.get("follow_up", ""),
+            follow_ups=answer_data.get("follow_ups", []),
             confidence=answer_data.get("confidence", "medium"),
             chart_type=answer_data.get("chart_type", "table"),
             chart_config=answer_data.get("chart_config", {}),

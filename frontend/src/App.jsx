@@ -81,7 +81,7 @@ function Chart({ type, data, config }) {
   )
 }
 
-function ResponseCard({ res }) {
+function ResponseCard({ res, onAsk }) {
   const [sqlOpen, setSqlOpen] = useState(false)
   const [lineageOpen, setLineageOpen] = useState(false)
   const chartIcon = { line: <LineChartIcon size={14} />, bar: <BarChart3 size={14} />, pie: <PieChartIcon size={14} />, table: <Table2 size={14} />, number: <Hash size={14} /> }
@@ -144,11 +144,20 @@ function ResponseCard({ res }) {
         )}
       </AnimatePresence>
 
-      {/* Follow-up */}
-      {res.follow_up && (
-        <div className="flex items-center gap-2 text-xs text-gray-500">
-          <MessageSquare size={12} />
-          <span>Try asking: <span className="text-cyan-400/70 italic">"{res.follow_up}"</span></span>
+      {/* Follow-up suggestions */}
+      {(res.follow_ups?.length > 0 || res.follow_up) && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            <Sparkles size={12} className="text-cyan-400/50" />
+            <span>Continue exploring:</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(res.follow_ups?.length > 0 ? res.follow_ups : [res.follow_up]).map((q, i) => (
+              <button key={i} onClick={() => onAsk(q)} className="text-left text-xs text-gray-400 hover:text-cyan-400 bg-dark-700 hover:bg-dark-600 border border-dark-600 hover:border-cyan-400/20 rounded-lg px-3 py-2 transition-all hover:-translate-y-0.5">
+                {q}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </motion.div>
@@ -247,7 +256,7 @@ export default function App() {
                   </div>
                 </motion.div>
               )}
-              {msg.type === 'response' && <ResponseCard res={msg.data} />}
+              {msg.type === 'response' && <ResponseCard res={msg.data} onAsk={ask} />}
               {msg.type === 'error' && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-rose-400/10 border border-rose-400/15 rounded-2xl px-5 py-3">
                   <p className="text-sm text-rose-400">{msg.text}</p>
