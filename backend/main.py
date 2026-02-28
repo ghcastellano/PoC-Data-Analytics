@@ -7,6 +7,7 @@ import json
 import time
 import traceback
 import hashlib
+import uuid
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
@@ -15,6 +16,7 @@ from pathlib import Path
 import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import psycopg2
 import psycopg2.extras
@@ -27,7 +29,7 @@ load_dotenv()  # also try project root
 
 # ─── App setup ───
 
-app = FastAPI(title="Analytics Copilot API", version="2.0.0")
+app = FastAPI(title="Analytics Copilot API", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +47,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://copilot:copilot123@localh
 audit_log: list[dict] = []
 successful_queries: dict[str, dict] = {}  # hash → {question, sql} for few-shot
 shared_reports: dict[str, dict] = {}  # share_id → response data
+conversations: dict[str, list[dict]] = {}  # conversation_id → [{question, answer, sql}]
 
 # ─── Semantic Layer ───
 
@@ -222,6 +225,7 @@ class CopilotResponse(BaseModel):
     analysis: dict = {}
     agent_trace: list = []
     trust_score: float = 0.0
+    conversation_id: str = ""
 
 
 # ─── Database helpers ───
@@ -291,6 +295,30 @@ def compute_trust_score(lineage: list, confidence: str, rows: int) -> float:
     return round((quality_avg * 0.5 + conf_score * 0.3 + completeness * 0.2) * 100, 1)
 
 
+# ─── Conversation Memory ───
+
+def build_conversation_context(conversation_id: str) -> str:
+    """Build context from previous conversation turns."""
+    if not conversation_id or conversation_id not in conversations:
+        return ""
+    history = conversations[conversation_id]
+    if not history:
+        return ""
+    parts = ["\n--- CONVERSATION CONTEXT (previous questions in this session) ---"]
+    for i, turn in enumerate(history[-5:], 1):  # last 5 turns max
+        parts.append(f"  Turn {i}: \"{turn['question']}\"")
+        if turn.get("sql_summary"):
+            parts.append(f"    → Queried: {turn['sql_summary']}")
+        if turn.get("answer_summary"):
+            parts.append(f"    → Answer: {turn['answer_summary'][:150]}")
+    parts.append("\nUse this context to resolve pronouns and references. For example:")
+    parts.append("  - 'and by service line?' → means break down the SAME metric as previous question, but by service_line")
+    parts.append("  - 'what about Insurance?' → means apply the SAME analysis but filtered to Insurance BU")
+    parts.append("  - 'show the trend' → means show the SAME metric over time")
+    parts.append("  - 'compare that' → means compare the SAME metric across dimensions")
+    return "\n".join(parts)
+
+
 # ─── Agent Functions ───
 
 def get_few_shot_examples() -> str:
@@ -300,11 +328,12 @@ def get_few_shot_examples() -> str:
     return "\n".join(f"Q: {e['question']}\nSQL: {e['sql']}" for e in examples)
 
 
-def agent_sql(question: str) -> tuple[str, list[dict]]:
-    """SQL Agent: Generate SQL with up to 3 retry attempts."""
+def agent_sql(question: str, conversation_id: str = None) -> tuple[str, list[dict]]:
+    """SQL Agent: Generate SQL with up to 3 retry attempts + conversation context."""
     trace = []
     few_shot = get_few_shot_examples()
-    system_prompt = SQL_AGENT_SYSTEM.replace("{few_shot}", few_shot)
+    conv_context = build_conversation_context(conversation_id)
+    system_prompt = SQL_AGENT_SYSTEM.replace("{few_shot}", few_shot) + conv_context
     known_tables = ['business_units', 'service_lines', 'monthly_metrics', 'projects', 'data_lineage']
 
     for attempt in range(1, 4):
@@ -347,6 +376,7 @@ def agent_sql(question: str) -> tuple[str, list[dict]]:
 
             # Build reasoning
             tables_used = [t for t in known_tables if t in sql.lower()]
+            context_note = " Used conversation context to resolve references." if conv_context else ""
             trace[-1].update({
                 "status": "success",
                 "sql": sql,
@@ -356,7 +386,7 @@ def agent_sql(question: str) -> tuple[str, list[dict]]:
                 "reasoning": (
                     f"Parsed natural language query and generated PostgreSQL "
                     f"joining {len(tables_used)} table(s) ({', '.join(tables_used)}). "
-                    f"Query executed successfully on attempt {attempt}, returning {len(data)} rows."
+                    f"Query executed successfully on attempt {attempt}, returning {len(data)} rows.{context_note}"
                 ),
             })
 
@@ -485,7 +515,7 @@ def agent_narrative(question: str, data: list, columns: list, analysis: dict) ->
 
 @app.get("/health")
 def health():
-    return {"status": "OK", "version": "2.0.0", "agents": ["sql", "analysis", "narrative"], "timestamp": datetime.now().isoformat()}
+    return {"status": "OK", "version": "3.0.0", "agents": ["sql", "analysis", "narrative"], "timestamp": datetime.now().isoformat()}
 
 
 @app.get("/api/schema")
@@ -537,36 +567,207 @@ def suggestions():
     ]
 
 
-@app.post("/api/ask", response_model=CopilotResponse)
-def ask(req: QuestionRequest):
-    """Multi-agent pipeline: SQL Agent → Analysis Agent → Narrative Agent."""
+# ─── SSE Streaming Endpoint ───
+
+def sse_event(event_type: str, data: dict) -> str:
+    """Format a Server-Sent Event."""
+    return f"event: {event_type}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def streaming_pipeline(question: str, conversation_id: str):
+    """Generator that yields SSE events as each agent completes."""
     start = time.time()
     all_trace = []
+    conv_id = conversation_id or str(uuid.uuid4())[:12]
+
+    # Ensure conversation exists
+    if conv_id not in conversations:
+        conversations[conv_id] = []
 
     try:
-        # Agent 1: SQL Generation + Execution (with retry)
-        sql, sql_trace = agent_sql(req.question)
+        # ── Agent 1: SQL ──
+        yield sse_event("agent_start", {
+            "agent": "sql", "label": "SQL Agent",
+            "description": "Parsing natural language and generating PostgreSQL query...",
+            "step": 1, "total_steps": 3,
+        })
+
+        sql, sql_trace = agent_sql(question, conv_id)
         all_trace.extend(sql_trace)
+        last_sql_step = next((t for t in reversed(sql_trace) if t.get("status") == "success"), sql_trace[-1])
+
+        yield sse_event("agent_complete", {
+            "agent": "sql", "step": 1,
+            "duration_ms": last_sql_step.get("duration_ms", 0),
+            "reasoning": last_sql_step.get("reasoning", ""),
+            "rows": last_sql_step.get("rows", 0),
+            "tables_used": last_sql_step.get("tables_used", []),
+            "sql_preview": sql[:120] + "..." if len(sql) > 120 else sql,
+        })
 
         # Execute final SQL
         data, columns = execute_sql(sql)
 
-        # Agent 2: Analysis
-        analysis, analysis_trace = agent_analysis(req.question, data, columns)
+        # ── Agent 2: Analysis ──
+        yield sse_event("agent_start", {
+            "agent": "analysis", "label": "Analysis Agent",
+            "description": f"Analyzing {len(data)} data points across {len(columns)} dimensions...",
+            "step": 2, "total_steps": 3,
+        })
+
+        analysis, analysis_trace = agent_analysis(question, data, columns)
         all_trace.extend(analysis_trace)
 
-        # Agent 3: Narrative
-        narrative_result, narrative_trace = agent_narrative(req.question, data, columns, analysis)
+        yield sse_event("agent_complete", {
+            "agent": "analysis", "step": 2,
+            "duration_ms": analysis_trace[0].get("duration_ms", 0),
+            "reasoning": analysis_trace[0].get("reasoning", ""),
+            "findings": analysis_trace[0].get("findings", {}),
+        })
+
+        # ── Agent 3: Narrative ──
+        yield sse_event("agent_start", {
+            "agent": "narrative", "label": "Narrative Agent",
+            "description": "Composing executive narrative with actionable recommendations...",
+            "step": 3, "total_steps": 3,
+        })
+
+        narrative_result, narrative_trace = agent_narrative(question, data, columns, analysis)
         all_trace.extend(narrative_trace)
 
-        # Lineage & Trust
+        yield sse_event("agent_complete", {
+            "agent": "narrative", "step": 3,
+            "duration_ms": narrative_trace[0].get("duration_ms", 0),
+            "reasoning": narrative_trace[0].get("reasoning", ""),
+            "confidence": narrative_result.get("confidence", "medium"),
+            "chart_type": narrative_result.get("chart_type", "table"),
+        })
+
+        # ── Final Result ──
         lineage_data = get_lineage(sql)
         confidence = narrative_result.get("confidence", "medium")
         trust = compute_trust_score(lineage_data, confidence, len(data))
-
         elapsed = int((time.time() - start) * 1000)
 
-        # Audit log (enriched with agent breakdown)
+        # Update conversation memory
+        tables_in_sql = [t for t in ['business_units', 'service_lines', 'monthly_metrics', 'projects'] if t in sql.lower()]
+        conversations[conv_id].append({
+            "question": question,
+            "sql_summary": f"Queried {', '.join(tables_in_sql)} → {len(data)} rows",
+            "answer_summary": narrative_result.get("answer", "")[:200],
+        })
+        # Keep last 10 turns
+        if len(conversations[conv_id]) > 10:
+            conversations[conv_id] = conversations[conv_id][-10:]
+
+        # Audit log
+        audit_log.append({
+            "timestamp": datetime.now().isoformat(),
+            "question": question,
+            "sql": sql,
+            "rows": len(data),
+            "confidence": confidence,
+            "trust_score": trust,
+            "execution_time_ms": elapsed,
+            "agents": [t.get("agent") for t in all_trace],
+            "agent_breakdown": [
+                {
+                    "agent": t.get("agent"),
+                    "status": t.get("status"),
+                    "duration_ms": t.get("duration_ms", 0),
+                    "reasoning": t.get("reasoning", ""),
+                }
+                for t in all_trace
+                if t.get("status") in ("success", "partial")
+            ],
+            "analysis_summary": {
+                "trends": analysis.get("trends", [])[:3],
+                "risk_flags": analysis.get("risk_flags", []),
+                "outliers": analysis.get("outliers", [])[:2],
+            },
+        })
+
+        # Final payload
+        final = {
+            "answer": narrative_result.get("answer", ""),
+            "insight": narrative_result.get("insight", ""),
+            "follow_up": narrative_result.get("follow_ups", [""])[0] if narrative_result.get("follow_ups") else "",
+            "follow_ups": narrative_result.get("follow_ups", []),
+            "confidence": confidence,
+            "chart_type": narrative_result.get("chart_type", "table"),
+            "chart_config": narrative_result.get("chart_config", {}),
+            "data": data[:100],
+            "sql": sql,
+            "execution_time_ms": elapsed,
+            "rows_returned": len(data),
+            "lineage": lineage_data,
+            "timestamp": datetime.now().isoformat(),
+            "narrative": narrative_result.get("narrative", ""),
+            "recommendation": narrative_result.get("recommendation", ""),
+            "analysis": analysis,
+            "agent_trace": all_trace,
+            "trust_score": trust,
+            "conversation_id": conv_id,
+        }
+
+        yield sse_event("result", final)
+
+    except Exception as e:
+        traceback.print_exc()
+        yield sse_event("error", {"detail": f"Agent pipeline error: {str(e)[:300]}"})
+
+
+@app.post("/api/ask/stream")
+def ask_stream(req: QuestionRequest):
+    """SSE streaming endpoint — real-time agent activity."""
+    return StreamingResponse(
+        streaming_pipeline(req.question, req.conversation_id or ""),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/ask", response_model=CopilotResponse)
+def ask(req: QuestionRequest):
+    """Multi-agent pipeline: SQL Agent → Analysis Agent → Narrative Agent (non-streaming fallback)."""
+    start = time.time()
+    all_trace = []
+    conv_id = req.conversation_id or str(uuid.uuid4())[:12]
+
+    if conv_id not in conversations:
+        conversations[conv_id] = []
+
+    try:
+        sql, sql_trace = agent_sql(req.question, conv_id)
+        all_trace.extend(sql_trace)
+
+        data, columns = execute_sql(sql)
+
+        analysis, analysis_trace = agent_analysis(req.question, data, columns)
+        all_trace.extend(analysis_trace)
+
+        narrative_result, narrative_trace = agent_narrative(req.question, data, columns, analysis)
+        all_trace.extend(narrative_trace)
+
+        lineage_data = get_lineage(sql)
+        confidence = narrative_result.get("confidence", "medium")
+        trust = compute_trust_score(lineage_data, confidence, len(data))
+        elapsed = int((time.time() - start) * 1000)
+
+        # Update conversation memory
+        tables_in_sql = [t for t in ['business_units', 'service_lines', 'monthly_metrics', 'projects'] if t in sql.lower()]
+        conversations[conv_id].append({
+            "question": req.question,
+            "sql_summary": f"Queried {', '.join(tables_in_sql)} → {len(data)} rows",
+            "answer_summary": narrative_result.get("answer", "")[:200],
+        })
+        if len(conversations[conv_id]) > 10:
+            conversations[conv_id] = conversations[conv_id][-10:]
+
         audit_log.append({
             "timestamp": datetime.now().isoformat(),
             "question": req.question,
@@ -612,6 +813,7 @@ def ask(req: QuestionRequest):
             analysis=analysis,
             agent_trace=all_trace,
             trust_score=trust,
+            conversation_id=conv_id,
         )
 
     except Exception as e:
@@ -757,6 +959,101 @@ def dashboard_business_units():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT id, name, code FROM business_units ORDER BY name")
         return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+# ─── Anomaly Detection Endpoint ───
+
+@app.get("/api/dashboard/anomalies")
+def dashboard_anomalies(bu: Optional[str] = None):
+    """AI-powered anomaly detection across all KPIs — compares latest period vs historical."""
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        bu_filter = ""
+        params = []
+        if bu:
+            bu_filter = "AND bu.name = %s"
+            params = [bu]
+
+        # Get last 6 months for trend analysis
+        sql = f"""
+        SELECT
+            mm.period,
+            bu.name AS business_unit,
+            ROUND(SUM(mm.revenue)::numeric, 2) AS revenue,
+            ROUND(SUM(mm.pipeline)::numeric, 2) AS pipeline,
+            ROUND(AVG(mm.margin_pct)::numeric, 2) AS margin_pct,
+            ROUND(AVG(mm.utilization_pct)::numeric, 2) AS utilization_pct,
+            ROUND(AVG(mm.nps_score)::numeric, 2) AS nps_score,
+            ROUND(AVG(mm.churn_rate)::numeric, 2) AS churn_rate,
+            SUM(mm.active_projects) AS active_projects,
+            SUM(mm.new_deals) AS new_deals
+        FROM monthly_metrics mm
+        JOIN business_units bu ON mm.business_unit_id = bu.id
+        WHERE mm.period >= '2025-07-01'
+        {bu_filter}
+        GROUP BY mm.period, bu.name
+        ORDER BY mm.period ASC, bu.name
+        """
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+        data_for_analysis = []
+        for r in rows:
+            clean = {}
+            for k, v in dict(r).items():
+                if isinstance(v, Decimal):
+                    clean[k] = float(v)
+                elif hasattr(v, 'isoformat'):
+                    clean[k] = v.isoformat()
+                else:
+                    clean[k] = v
+            data_for_analysis.append(clean)
+
+        if not data_for_analysis:
+            return {"anomalies": [], "scan_timestamp": datetime.now().isoformat()}
+
+        # Use GPT-4o to detect anomalies
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            temperature=0.1,
+            max_tokens=600,
+            messages=[
+                {"role": "system", "content": """You are an anomaly detection agent for a consulting firm's executive dashboard.
+Analyze the time-series KPI data and detect anomalies: sudden drops, unusual spikes, concerning trends, threshold breaches, or divergent patterns between business units.
+
+Return JSON with:
+{
+  "anomalies": [
+    {
+      "severity": "critical|warning|info",
+      "metric": "the metric name (e.g. revenue, margin_pct, nps_score)",
+      "business_unit": "affected BU or 'All'",
+      "title": "Short anomaly title (max 60 chars)",
+      "description": "What happened and why it matters (1-2 sentences)",
+      "value": "the anomalous value",
+      "expected": "what was expected based on trend",
+      "change_pct": <percentage change as number>,
+      "suggested_query": "A natural language question the user can ask the Copilot to investigate this anomaly"
+    }
+  ]
+}
+
+Return 2-4 anomalies max. Focus on the most impactful findings. Be precise with numbers."""},
+                {"role": "user", "content": json.dumps({"kpi_data": data_for_analysis})},
+            ],
+        )
+        raw = response.choices[0].message.content.strip().replace("```json", "").replace("```", "").strip()
+        result = json.loads(raw)
+        result["scan_timestamp"] = datetime.now().isoformat()
+        result["data_points_analyzed"] = len(data_for_analysis)
+        return result
+    except Exception as e:
+        traceback.print_exc()
+        return {"anomalies": [], "scan_timestamp": datetime.now().isoformat(), "error": str(e)[:100]}
     finally:
         conn.close()
 

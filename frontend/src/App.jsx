@@ -1,11 +1,12 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Send, Database, Shield, Brain, ChevronDown, ChevronUp, Clock, Rows3,
   Sparkles, Table2, BarChart3, LineChart as LineChartIcon, PieChart as PieChartIcon,
   Hash, Lightbulb, LayoutDashboard, MessageSquare, Eye, Activity,
   TrendingUp, TrendingDown, AlertTriangle, CheckCircle2, XCircle,
-  RefreshCw, FileText, Share2, Filter, Cpu, Zap, ArrowRight, Copy, Check
+  RefreshCw, FileText, Share2, Filter, Cpu, Zap, ArrowRight, Copy, Check,
+  Radio, Search, Link2, MessageCircle
 } from 'lucide-react'
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -255,14 +256,126 @@ function AgentPanel({ trace, response, isOpen, onToggle }) {
   )
 }
 
+// ─── Live Agent Stepper (SSE-driven) ───
+
+function LiveAgentStepper({ streamEvents }) {
+  const agentState = {}
+  const agentOrder = ['sql', 'analysis', 'narrative']
+
+  for (const evt of streamEvents) {
+    if (evt.type === 'agent_start') agentState[evt.data.agent] = { status: 'active', ...evt.data }
+    if (evt.type === 'agent_complete') agentState[evt.data.agent] = { status: 'done', ...evt.data }
+  }
+
+  const steps = [
+    { key: 'sql', icon: Database, label: 'SQL Agent', color: 'cyan' },
+    { key: 'analysis', icon: Activity, label: 'Analysis Agent', color: 'violet' },
+    { key: 'narrative', icon: FileText, label: 'Narrative Agent', color: 'teal' },
+  ]
+
+  const colorMap = { cyan: 'text-cyan-400', violet: 'text-violet-400', teal: 'text-teal-400' }
+  const bgMap = { cyan: 'bg-cyan-400', violet: 'bg-violet-400', teal: 'bg-teal-400' }
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-dark-700 border border-dark-600 rounded-2xl p-5 max-w-lg">
+      <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">
+        <Radio size={12} className="text-rose-400 animate-pulse" />
+        <span className="font-mono uppercase tracking-wider">Multi-Agent Pipeline — Live</span>
+      </div>
+      <div className="space-y-2">
+        {steps.map((step) => {
+          const state = agentState[step.key]
+          const isDone = state?.status === 'done'
+          const isActive = state?.status === 'active'
+          const isPending = !state
+          const Icon = step.icon
+
+          return (
+            <motion.div key={step.key} initial={{ opacity: 0.4 }} animate={{ opacity: isPending ? 0.3 : 1 }}
+              className={`rounded-xl px-4 py-3 transition-all ${isActive ? 'bg-dark-600 border border-dark-600' : isDone ? 'bg-dark-600/30' : ''}`}>
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  <Icon size={16} className={isDone ? 'text-emerald-400' : isActive ? colorMap[step.color] : 'text-gray-600'} />
+                  {isActive && (
+                    <motion.div className={`absolute -inset-2 rounded-full ${bgMap[step.color]} opacity-20`}
+                      animate={{ scale: [1, 1.6, 1], opacity: [0.2, 0.05, 0.2] }}
+                      transition={{ duration: 1.2, repeat: Infinity }} />
+                  )}
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-mono font-semibold ${isDone ? 'text-emerald-400' : isActive ? colorMap[step.color] : 'text-gray-600'}`}>
+                      {step.label}
+                    </span>
+                    {isDone && <CheckCircle2 size={12} className="text-emerald-400" />}
+                    {isDone && state.duration_ms && <span className="text-[10px] font-mono text-gray-500">{state.duration_ms}ms</span>}
+                    {isActive && (
+                      <div className="flex gap-0.5">
+                        {[0, 1, 2].map(j => (
+                          <motion.div key={j} className={`w-1 h-1 rounded-full ${bgMap[step.color]}`}
+                            animate={{ opacity: [0.3, 1, 0.3] }}
+                            transition={{ duration: 1, repeat: Infinity, delay: j * 0.2 }} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {/* Live description from SSE */}
+                  {isActive && state.description && (
+                    <p className="text-[10px] text-gray-500 mt-0.5">{state.description}</p>
+                  )}
+                  {isDone && state.reasoning && (
+                    <p className="text-[10px] text-gray-500 mt-0.5 italic">{state.reasoning}</p>
+                  )}
+                  {/* SQL Agent: show preview */}
+                  {isDone && step.key === 'sql' && state.sql_preview && (
+                    <pre className="text-[9px] font-mono text-cyan-400/50 bg-dark-800 rounded px-2 py-1 mt-1 truncate max-w-md">{state.sql_preview}</pre>
+                  )}
+                  {/* Analysis Agent: show findings count */}
+                  {isDone && step.key === 'analysis' && state.findings && (
+                    <div className="flex items-center gap-3 mt-1 text-[10px]">
+                      {state.findings.trends_count > 0 && <span className="text-emerald-400">{state.findings.trends_count} trends</span>}
+                      {state.findings.outliers_count > 0 && <span className="text-amber-400">{state.findings.outliers_count} outliers</span>}
+                      {state.findings.risk_flags_count > 0 && <span className="text-rose-400">{state.findings.risk_flags_count} risks</span>}
+                    </div>
+                  )}
+                  {/* Narrative Agent: show confidence */}
+                  {isDone && step.key === 'narrative' && state.confidence && (
+                    <div className="flex items-center gap-2 mt-1">
+                      <ConfidenceBadge level={state.confidence} />
+                      {state.chart_type && <span className="text-[10px] text-teal-400/70 font-mono">{state.chart_type} chart</span>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          )
+        })}
+      </div>
+    </motion.div>
+  )
+}
+
+// ─── Conversation Memory Indicator ───
+
+function ConversationBadge({ turnCount, conversationId }) {
+  if (!turnCount || turnCount < 1) return null
+  return (
+    <div className="flex items-center gap-2 text-[10px] font-mono text-violet-400/70 bg-violet-400/5 border border-violet-400/10 rounded-full px-3 py-1">
+      <MessageCircle size={10} />
+      <span>Context: {turnCount} turn{turnCount > 1 ? 's' : ''}</span>
+      <span className="text-dark-600">|</span>
+      <span className="text-gray-600">{conversationId}</span>
+    </div>
+  )
+}
+
 // ─── Response Card (Copilot) ───
 
-function ResponseCard({ res, onAsk }) {
+function ResponseCard({ res, onAsk, turnNumber, conversationId }) {
   const [sqlOpen, setSqlOpen] = useState(false)
   const [lineageOpen, setLineageOpen] = useState(false)
   const [traceOpen, setTraceOpen] = useState(true)
   const [shared, setShared] = useState(false)
-  const [copied, setCopied] = useState(false)
   const chartIcon = { line: <LineChartIcon size={14} />, bar: <BarChart3 size={14} />, pie: <PieChartIcon size={14} />, table: <Table2 size={14} />, number: <Hash size={14} /> }
 
   async function handleShare() {
@@ -291,6 +404,13 @@ function ResponseCard({ res, onAsk }) {
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+      {/* Conversation context badge */}
+      {turnNumber > 1 && (
+        <div className="flex items-center gap-2">
+          <ConversationBadge turnCount={turnNumber} conversationId={conversationId || res.conversation_id} />
+        </div>
+      )}
+
       {/* Answer + Narrative */}
       <div className="bg-dark-700 border border-dark-600 rounded-2xl p-5">
         <div className="flex items-start justify-between gap-3 mb-3">
@@ -457,13 +577,58 @@ function InsightCard({ insight }) {
   )
 }
 
-function DashboardTab() {
+// ─── Anomaly Detection Card ───
+
+function AnomalyCard({ anomaly, onInvestigate }) {
+  const severityStyles = {
+    critical: { bg: 'bg-rose-400/5', border: 'border-rose-400/30', icon: <XCircle size={16} className="text-rose-400" />, accent: 'text-rose-400', glow: 'shadow-rose-500/10' },
+    warning: { bg: 'bg-amber-400/5', border: 'border-amber-400/30', icon: <AlertTriangle size={16} className="text-amber-400" />, accent: 'text-amber-400', glow: 'shadow-amber-500/10' },
+    info: { bg: 'bg-cyan-400/5', border: 'border-cyan-400/30', icon: <Lightbulb size={16} className="text-cyan-400" />, accent: 'text-cyan-400', glow: 'shadow-cyan-500/10' },
+  }
+  const s = severityStyles[anomaly.severity] || severityStyles.info
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+      className={`${s.bg} ${s.border} border rounded-xl p-4 ${s.glow} shadow-lg`}>
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 shrink-0">{s.icon}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className={`text-sm font-semibold ${s.accent}`}>{anomaly.title}</span>
+            {anomaly.change_pct && (
+              <span className={`text-[10px] font-mono ${anomaly.change_pct < 0 ? 'text-rose-400' : 'text-emerald-400'} bg-dark-800 px-1.5 py-0.5 rounded`}>
+                {anomaly.change_pct > 0 ? '+' : ''}{anomaly.change_pct}%
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-gray-400 leading-relaxed">{anomaly.description}</p>
+          <div className="flex items-center gap-3 mt-2 text-[10px] font-mono text-gray-500">
+            {anomaly.metric && <span className="bg-dark-800 px-1.5 py-0.5 rounded">{anomaly.metric}</span>}
+            {anomaly.business_unit && anomaly.business_unit !== 'All' && (
+              <span className="bg-dark-800 px-1.5 py-0.5 rounded">{anomaly.business_unit}</span>
+            )}
+          </div>
+          {anomaly.suggested_query && (
+            <button onClick={() => onInvestigate(anomaly.suggested_query)}
+              className="mt-3 flex items-center gap-1.5 text-[11px] font-mono text-cyan-400 hover:text-cyan-300 bg-cyan-400/10 hover:bg-cyan-400/15 border border-cyan-400/20 rounded-lg px-3 py-1.5 transition-all">
+              <Search size={12} /> Investigate in Copilot
+            </button>
+          )}
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
+function DashboardTab({ onNavigateToCopilot }) {
   const [kpiData, setKpiData] = useState(null)
   const [insights, setInsights] = useState(null)
+  const [anomalies, setAnomalies] = useState(null)
   const [businessUnits, setBusinessUnits] = useState([])
   const [selectedBu, setSelectedBu] = useState('')
   const [loadingKpis, setLoadingKpis] = useState(true)
   const [loadingInsights, setLoadingInsights] = useState(true)
+  const [loadingAnomalies, setLoadingAnomalies] = useState(true)
 
   useEffect(() => {
     fetch(`${API}/api/dashboard/business-units`).then(r => r.json()).then(setBusinessUnits).catch(() => {})
@@ -472,11 +637,14 @@ function DashboardTab() {
   useEffect(() => {
     setLoadingKpis(true)
     setLoadingInsights(true)
+    setLoadingAnomalies(true)
     const buParam = selectedBu ? `?bu=${encodeURIComponent(selectedBu)}` : ''
     fetch(`${API}/api/dashboard/kpis${buParam}`)
       .then(r => r.json()).then(d => { setKpiData(d); setLoadingKpis(false) }).catch(() => setLoadingKpis(false))
     fetch(`${API}/api/dashboard/insights${buParam}`)
       .then(r => r.json()).then(d => { setInsights(d); setLoadingInsights(false) }).catch(() => setLoadingInsights(false))
+    fetch(`${API}/api/dashboard/anomalies${buParam}`)
+      .then(r => r.json()).then(d => { setAnomalies(d); setLoadingAnomalies(false) }).catch(() => setLoadingAnomalies(false))
   }, [selectedBu])
 
   return (
@@ -485,7 +653,7 @@ function DashboardTab() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-display text-3xl italic text-gray-100">Executive Dashboard</h2>
-          <p className="text-xs text-gray-500 mt-1 font-mono">Real-time KPIs with AI-generated insights</p>
+          <p className="text-xs text-gray-500 mt-1 font-mono">Real-time KPIs with AI-generated insights and anomaly detection</p>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 bg-dark-700 border border-dark-600 rounded-lg px-3 py-1.5">
@@ -508,6 +676,34 @@ function DashboardTab() {
           {kpiData?.kpis?.map((kpi, i) => <KpiCard key={kpi.key} kpi={kpi} />)}
         </div>
       )}
+
+      {/* Anomaly Detection */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <Radio size={16} className="text-rose-400" />
+          <h3 className="text-sm font-semibold text-gray-200">Anomaly Detection</h3>
+          <span className="text-[10px] font-mono text-gray-600 bg-dark-700 border border-dark-600 rounded-full px-2 py-0.5">AI-powered</span>
+          {loadingAnomalies && <RefreshCw size={12} className="text-gray-500 animate-spin" />}
+        </div>
+        {loadingAnomalies ? (
+          <div className="space-y-3">{[...Array(2)].map((_, i) => <Skeleton key={i} className="h-24" />)}</div>
+        ) : anomalies?.anomalies?.length > 0 ? (
+          <div className="space-y-3">
+            {anomalies.anomalies.map((a, i) => (
+              <AnomalyCard key={i} anomaly={a} onInvestigate={(q) => onNavigateToCopilot(q)} />
+            ))}
+            <div className="flex items-center gap-2 text-[10px] font-mono text-gray-600">
+              <Activity size={10} />
+              <span>Scanned {anomalies.data_points_analyzed} data points at {new Date(anomalies.scan_timestamp).toLocaleTimeString()}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-emerald-400/5 border border-emerald-400/20 rounded-xl p-4 flex items-center gap-3 text-xs">
+            <CheckCircle2 size={14} className="text-emerald-400" />
+            <span className="text-emerald-400/80">No anomalies detected — all KPIs within expected ranges.</span>
+          </div>
+        )}
+      </div>
 
       {/* AI Insights */}
       <div>
@@ -646,7 +842,6 @@ function GovernanceTab() {
       {/* Quality Section */}
       {activeSection === 'quality' && quality && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-          {/* Overall score */}
           <div className="bg-dark-700 border border-dark-600 rounded-2xl p-5 flex items-center gap-6">
             <div>
               <span className="text-xs font-mono text-gray-500">OVERALL QUALITY</span>
@@ -658,7 +853,6 @@ function GovernanceTab() {
             <span className="text-xs font-mono text-gray-500">{quality.total_tables} tables tracked</span>
           </div>
 
-          {/* Table cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {quality.tables.map(t => {
               const freshnessColor = { fresh: 'text-emerald-400', aging: 'text-amber-400', stale: 'text-rose-400' }
@@ -811,85 +1005,18 @@ function GovernanceTab() {
   )
 }
 
-// ─── Agent Stepper (Animated Loading) ───
+// ─── Copilot Chat Tab (SSE Streaming + Conversation Memory) ───
 
-function AgentStepper() {
-  const [activeStep, setActiveStep] = useState(0)
-
-  useEffect(() => {
-    const t1 = setTimeout(() => setActiveStep(1), 1800)
-    const t2 = setTimeout(() => setActiveStep(2), 3600)
-    return () => { clearTimeout(t1); clearTimeout(t2) }
-  }, [])
-
-  const steps = [
-    { icon: Database, label: 'SQL Agent', desc: 'Generating & executing query...', color: 'cyan' },
-    { icon: Activity, label: 'Analysis Agent', desc: 'Detecting trends & outliers...', color: 'violet' },
-    { icon: FileText, label: 'Narrative Agent', desc: 'Composing executive summary...', color: 'teal' },
-  ]
-
-  const colorMap = { cyan: 'text-cyan-400', violet: 'text-violet-400', teal: 'text-teal-400' }
-  const bgMap = { cyan: 'bg-cyan-400', violet: 'bg-violet-400', teal: 'bg-teal-400' }
-
-  return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-dark-700 border border-dark-600 rounded-2xl p-5 max-w-md">
-      <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">
-        <Zap size={12} className="text-violet-400" />
-        <span className="font-mono uppercase tracking-wider">Multi-Agent Pipeline Active</span>
-      </div>
-      <div className="space-y-3">
-        {steps.map((step, i) => {
-          const Icon = step.icon
-          const isActive = i === activeStep
-          const isDone = i < activeStep
-          const isPending = i > activeStep
-          return (
-            <motion.div key={i} initial={{ opacity: 0.5 }} animate={{ opacity: isPending ? 0.35 : 1 }}
-              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 transition-all ${isActive ? 'bg-dark-600 border border-dark-600' : ''}`}>
-              <div className="relative">
-                <Icon size={16} className={isDone ? 'text-emerald-400' : isActive ? colorMap[step.color] : 'text-gray-600'} />
-                {isActive && (
-                  <motion.div className={`absolute -inset-1.5 rounded-full ${bgMap[step.color]} opacity-20`}
-                    animate={{ scale: [1, 1.5, 1], opacity: [0.2, 0.05, 0.2] }}
-                    transition={{ duration: 1.5, repeat: Infinity }} />
-                )}
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs font-mono font-semibold ${isDone ? 'text-emerald-400' : isActive ? colorMap[step.color] : 'text-gray-600'}`}>
-                    {step.label}
-                  </span>
-                  {isDone && <CheckCircle2 size={12} className="text-emerald-400" />}
-                  {isActive && (
-                    <div className="flex gap-0.5">
-                      {[0, 1, 2].map(j => (
-                        <motion.div key={j} className={`w-1 h-1 rounded-full ${bgMap[step.color]}`}
-                          animate={{ opacity: [0.3, 1, 0.3] }}
-                          transition={{ duration: 1, repeat: Infinity, delay: j * 0.2 }} />
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {(isActive || isDone) && (
-                  <span className="text-[10px] text-gray-500">{isDone ? 'Complete' : step.desc}</span>
-                )}
-              </div>
-            </motion.div>
-          )
-        })}
-      </div>
-    </motion.div>
-  )
-}
-
-// ─── Copilot Chat Tab ───
-
-function CopilotTab() {
+function CopilotTab({ initialQuestion }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [streamEvents, setStreamEvents] = useState([])
   const [suggestions, setSuggestions] = useState([])
+  const [conversationId, setConversationId] = useState(null)
+  const [turnCount, setTurnCount] = useState(0)
   const bottomRef = useRef(null)
+  const initialAsked = useRef(false)
 
   useEffect(() => {
     fetch(`${API}/api/suggestions`).then(r => r.json()).then(setSuggestions).catch(() => {})
@@ -897,29 +1024,100 @@ function CopilotTab() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, loading])
+  }, [messages, loading, streamEvents])
 
-  async function ask(question) {
+  // Handle initial question from Dashboard anomaly "Investigate" button
+  useEffect(() => {
+    if (initialQuestion && !initialAsked.current) {
+      initialAsked.current = true
+      ask(initialQuestion)
+    }
+  }, [initialQuestion])
+
+  const ask = useCallback(async (question) => {
     if (!question.trim()) return
     const q = question.trim()
     setInput('')
     setMessages(prev => [...prev, { type: 'user', text: q }])
     setLoading(true)
+    setStreamEvents([])
+
+    const newTurn = turnCount + 1
+    setTurnCount(newTurn)
+
     try {
-      const res = await fetch(`${API}/api/ask`, {
+      // Try SSE streaming first
+      const res = await fetch(`${API}/api/ask/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({ question: q, conversation_id: conversationId }),
       })
+
       if (!res.ok) throw new Error(`Error ${res.status}`)
-      const data = await res.json()
-      setMessages(prev => [...prev, { type: 'response', data }])
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let finalResult = null
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        let currentEventType = null
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEventType = line.slice(7).trim()
+          } else if (line.startsWith('data: ') && currentEventType) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (currentEventType === 'result') {
+                finalResult = data
+              } else if (currentEventType === 'error') {
+                throw new Error(data.detail || 'Pipeline error')
+              } else {
+                setStreamEvents(prev => [...prev, { type: currentEventType, data }])
+              }
+            } catch (e) {
+              if (e.message && !e.message.includes('JSON')) throw e
+            }
+            currentEventType = null
+          }
+        }
+      }
+
+      if (finalResult) {
+        if (finalResult.conversation_id && !conversationId) {
+          setConversationId(finalResult.conversation_id)
+        }
+        setMessages(prev => [...prev, { type: 'response', data: finalResult, turn: newTurn }])
+      }
     } catch (err) {
-      setMessages(prev => [...prev, { type: 'error', text: err.message }])
+      // Fallback to non-streaming endpoint
+      try {
+        const res = await fetch(`${API}/api/ask`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q, conversation_id: conversationId }),
+        })
+        if (!res.ok) throw new Error(`Error ${res.status}`)
+        const data = await res.json()
+        if (data.conversation_id && !conversationId) {
+          setConversationId(data.conversation_id)
+        }
+        setMessages(prev => [...prev, { type: 'response', data, turn: newTurn }])
+      } catch (fallbackErr) {
+        setMessages(prev => [...prev, { type: 'error', text: fallbackErr.message }])
+      }
     } finally {
       setLoading(false)
+      setStreamEvents([])
     }
-  }
+  }, [conversationId, turnCount])
 
   const empty = messages.length === 0 && !loading
 
@@ -930,7 +1128,8 @@ function CopilotTab() {
           {empty && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="pt-12 text-center">
               <h2 className="font-display text-4xl italic text-gray-200 mb-2">Ask anything about your data</h2>
-              <p className="text-sm text-gray-500 mb-10">Multi-agent pipeline: SQL → Analysis → Narrative. Full transparency.</p>
+              <p className="text-sm text-gray-500 mb-3">Multi-agent pipeline: SQL → Analysis → Narrative. Full transparency with live streaming.</p>
+              <p className="text-xs text-gray-600 mb-10">Ask follow-up questions — the agents remember your conversation context.</p>
               <div className="grid grid-cols-2 gap-2 max-w-xl mx-auto">
                 {suggestions.map((s, i) => (
                   <button key={i} onClick={() => ask(s)} className="text-left text-xs text-gray-400 bg-dark-700 hover:bg-dark-600 border border-dark-600 hover:border-cyan-400/20 rounded-xl px-4 py-3 transition-all hover:-translate-y-0.5">
@@ -939,7 +1138,7 @@ function CopilotTab() {
                 ))}
               </div>
               <div className="flex items-center justify-center gap-3 mt-10 flex-wrap">
-                {['Multi-Agent AI', 'Semantic Layer', 'Responsible AI', 'Data Governance'].map(p => (
+                {['Multi-Agent AI', 'Live Streaming', 'Conversation Memory', 'Data Governance'].map(p => (
                   <span key={p} className="text-[10px] font-mono text-cyan-400/50 border border-cyan-400/10 rounded-full px-3 py-1">{p}</span>
                 ))}
               </div>
@@ -955,7 +1154,7 @@ function CopilotTab() {
                   </div>
                 </motion.div>
               )}
-              {msg.type === 'response' && <ResponseCard res={msg.data} onAsk={ask} />}
+              {msg.type === 'response' && <ResponseCard res={msg.data} onAsk={ask} turnNumber={msg.turn} conversationId={conversationId} />}
               {msg.type === 'error' && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-rose-400/10 border border-rose-400/15 rounded-2xl px-5 py-3">
                   <p className="text-sm text-rose-400">{msg.text}</p>
@@ -964,19 +1163,34 @@ function CopilotTab() {
             </div>
           ))}
 
-          {loading && <AgentStepper />}
+          {loading && streamEvents.length > 0 && <LiveAgentStepper streamEvents={streamEvents} />}
+          {loading && streamEvents.length === 0 && (
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-dark-700 border border-dark-600 rounded-2xl p-5 max-w-lg">
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <Radio size={12} className="text-rose-400 animate-pulse" />
+                <span className="font-mono uppercase tracking-wider">Connecting to agent pipeline...</span>
+              </div>
+            </motion.div>
+          )}
           <div ref={bottomRef} />
         </div>
       </div>
 
       {/* Input */}
       <div className="shrink-0 pt-4">
+        {/* Conversation context indicator */}
+        {conversationId && turnCount > 0 && (
+          <div className="flex items-center gap-2 mb-2">
+            <ConversationBadge turnCount={turnCount} conversationId={conversationId} />
+            <span className="text-[10px] text-gray-600">Agents will use previous context to resolve references</span>
+          </div>
+        )}
         <div className="flex gap-3">
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && ask(input)}
-            placeholder="Ask a question about your data..."
+            placeholder={turnCount > 0 ? "Ask a follow-up (agents remember context)..." : "Ask a question about your data..."}
             className="flex-1 bg-dark-700 border border-dark-600 focus:border-cyan-400/30 rounded-xl px-4 py-3 text-sm text-gray-200 placeholder-gray-500 outline-none transition-colors"
             disabled={loading}
           />
@@ -985,7 +1199,7 @@ function CopilotTab() {
           </button>
         </div>
         <p className="text-[10px] text-gray-600 mt-2 text-center font-mono">
-          Multi-Agent Pipeline · SQL Agent → Analysis Agent → Narrative Agent · Full transparency
+          Live Streaming · SQL Agent → Analysis Agent → Narrative Agent · Conversation Memory Active
         </p>
       </div>
     </div>
@@ -1029,9 +1243,15 @@ function SharedReportView({ shareId }) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
+  const [copilotInitialQuestion, setCopilotInitialQuestion] = useState(null)
   const shareId = useMemo(() => new URLSearchParams(window.location.search).get('share'), [])
 
   if (shareId) return <SharedReportView shareId={shareId} />
+
+  function handleNavigateToCopilot(question) {
+    setCopilotInitialQuestion(question)
+    setActiveTab('copilot')
+  }
 
   return (
     <div className="h-screen flex flex-col">
@@ -1062,7 +1282,8 @@ export default function App() {
           <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />GPT-4o</span>
           <span className="flex items-center gap-1"><Database size={10} />PostgreSQL</span>
           <span className="flex items-center gap-1"><Cpu size={10} />3 Agents</span>
-          <span className="flex items-center gap-1"><Shield size={10} />Governance</span>
+          <span className="flex items-center gap-1"><Radio size={10} />Live Stream</span>
+          <span className="flex items-center gap-1"><MessageCircle size={10} />Memory</span>
         </div>
       </header>
 
@@ -1070,8 +1291,8 @@ export default function App() {
       <main className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-5xl mx-auto">
           <AnimatePresence mode="wait">
-            {activeTab === 'dashboard' && <motion.div key="dashboard" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}><DashboardTab /></motion.div>}
-            {activeTab === 'copilot' && <motion.div key="copilot" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="h-[calc(100vh-10rem)]"><CopilotTab /></motion.div>}
+            {activeTab === 'dashboard' && <motion.div key="dashboard" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}><DashboardTab onNavigateToCopilot={handleNavigateToCopilot} /></motion.div>}
+            {activeTab === 'copilot' && <motion.div key="copilot" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="h-[calc(100vh-10rem)]"><CopilotTab initialQuestion={copilotInitialQuestion} /></motion.div>}
             {activeTab === 'governance' && <motion.div key="governance" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}><GovernanceTab /></motion.div>}
           </AnimatePresence>
         </div>
