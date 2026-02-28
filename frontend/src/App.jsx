@@ -58,7 +58,7 @@ function Chart({ type, data, config }) {
           <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
           <XAxis dataKey={xKey} {...common} />
           <YAxis tickFormatter={fmt} {...common} />
-          <Tooltip contentStyle={{ background: '#131D33', border: '1px solid #1e3a5f', borderRadius: 8, fontSize: 12 }} formatter={fmt} />
+          <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} contentStyle={{ background: '#131D33', border: '1px solid #1e3a5f', borderRadius: 8, fontSize: 12 }} formatter={fmt} />
           {yKeys.length > 1 && <Legend />}
           {yKeys.map((k, i) => <Bar key={k} dataKey={k} fill={COLORS[i % COLORS.length]} radius={[4, 4, 0, 0]} />)}
         </BarChart>
@@ -73,7 +73,7 @@ function Chart({ type, data, config }) {
         <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
         <XAxis dataKey={xKey} {...common} />
         <YAxis tickFormatter={fmt} {...common} />
-        <Tooltip contentStyle={{ background: '#131D33', border: '1px solid #1e3a5f', borderRadius: 8, fontSize: 12 }} formatter={fmt} />
+        <Tooltip cursor={{ stroke: 'rgba(255,255,255,0.1)' }} contentStyle={{ background: '#131D33', border: '1px solid #1e3a5f', borderRadius: 8, fontSize: 12 }} formatter={fmt} />
         {yKeys.length > 1 && <Legend />}
         {yKeys.map((k, i) => <Line key={k} type="monotone" dataKey={k} stroke={COLORS[i % COLORS.length]} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />)}
       </LineChart>
