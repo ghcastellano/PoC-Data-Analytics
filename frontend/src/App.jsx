@@ -1,24 +1,60 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Database, Shield, Brain, ChevronDown, ChevronUp, Clock, Rows3, Sparkles, Table2, BarChart3, LineChart as LineChartIcon, PieChart as PieChartIcon, Hash, Info, Lightbulb, MessageSquare } from 'lucide-react'
-import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import {
+  Send, Database, Shield, Brain, ChevronDown, ChevronUp, Clock, Rows3,
+  Sparkles, Table2, BarChart3, LineChart as LineChartIcon, PieChart as PieChartIcon,
+  Hash, Lightbulb, LayoutDashboard, MessageSquare, Eye, Activity,
+  TrendingUp, TrendingDown, AlertTriangle, CheckCircle2, XCircle,
+  RefreshCw, FileText, Share2, Filter, Cpu, Zap, ArrowRight, Copy, Check
+} from 'lucide-react'
+import {
+  LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  AreaChart, Area
+} from 'recharts'
 
 const API = import.meta.env.VITE_API_URL || ''
 const COLORS = ['#00D4FF', '#7B61FF', '#00C9A7', '#FFB547', '#FF6B8A', '#0072BC']
+const TABS = [
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'copilot', label: 'Copilot', icon: MessageSquare },
+  { id: 'governance', label: 'Governance', icon: Shield },
+]
+
+// ─── Utility Components ───
 
 function ConfidenceBadge({ level }) {
-  const cfg = { high: { bg: 'bg-emerald-500/15', text: 'text-emerald-400', label: 'High Confidence' }, medium: { bg: 'bg-amber-500/15', text: 'text-amber-400', label: 'Medium Confidence' }, low: { bg: 'bg-rose-500/15', text: 'text-rose-400', label: 'Low Confidence' } }
+  const cfg = {
+    high: { bg: 'bg-emerald-500/15', text: 'text-emerald-400', label: 'High Confidence' },
+    medium: { bg: 'bg-amber-500/15', text: 'text-amber-400', label: 'Medium Confidence' },
+    low: { bg: 'bg-rose-500/15', text: 'text-rose-400', label: 'Low Confidence' },
+  }
   const c = cfg[level] || cfg.medium
   return <span className={`${c.bg} ${c.text} text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full`}>{c.label}</span>
 }
+
+function TrustBadge({ score }) {
+  const color = score >= 80 ? 'text-emerald-400 bg-emerald-400/10' : score >= 60 ? 'text-amber-400 bg-amber-400/10' : 'text-rose-400 bg-rose-400/10'
+  return <span className={`${color} text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full flex items-center gap-1`}><Shield size={10} />{score}% trust</span>
+}
+
+function StatusDot({ status }) {
+  const colors = { on_track: 'bg-emerald-400', warning: 'bg-amber-400', critical: 'bg-rose-400' }
+  return <span className={`w-2 h-2 rounded-full ${colors[status] || colors.on_track} inline-block`} />
+}
+
+function Skeleton({ className = '' }) {
+  return <div className={`animate-pulse bg-dark-600 rounded-lg ${className}`} />
+}
+
+// ─── Chart Component ───
 
 function Chart({ type, data, config }) {
   if (!data?.length) return null
   const xKey = config?.x_key || Object.keys(data[0])[0]
   const yKey = config?.y_key || Object.keys(data[0])[1]
   const yKeys = Array.isArray(yKey) ? yKey : [yKey]
-  const fmt = (v) => typeof v === 'number' ? (v >= 1000000 ? `${(v/1000000).toFixed(1)}M` : v >= 1000 ? `${(v/1000).toFixed(0)}K` : v.toFixed(1)) : v
-
+  const fmt = (v) => typeof v === 'number' ? (v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v.toFixed(1)) : v
   const common = { style: { fontSize: 11, fill: '#8B9DC3' } }
 
   if (type === 'number') {
@@ -66,7 +102,6 @@ function Chart({ type, data, config }) {
     )
   }
 
-  // Default: line
   return (
     <ResponsiveContainer width="100%" height={280}>
       <LineChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
@@ -81,20 +116,133 @@ function Chart({ type, data, config }) {
   )
 }
 
+// ─── Sparkline Mini Chart ───
+
+function Sparkline({ data, color = '#00D4FF', height = 32 }) {
+  if (!data?.length) return null
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <AreaChart data={data.map((v, i) => ({ v, i }))}>
+        <defs>
+          <linearGradient id={`spark-${color.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.3} />
+            <stop offset="100%" stopColor={color} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} fill={`url(#spark-${color.replace('#', '')})`} dot={false} />
+      </AreaChart>
+    </ResponsiveContainer>
+  )
+}
+
+// ─── Agent Reasoning Panel ───
+
+function AgentPanel({ trace, isOpen, onToggle }) {
+  if (!trace?.length) return null
+
+  const agentColors = { sql: 'text-cyan-400', analysis: 'text-violet-400', narrative: 'text-teal-400' }
+  const agentIcons = { sql: Database, analysis: Activity, narrative: FileText }
+  const agentLabels = { sql: 'SQL Agent', analysis: 'Analysis Agent', narrative: 'Narrative Agent' }
+
+  return (
+    <div className="mt-2">
+      <button onClick={onToggle} className="flex items-center gap-1.5 text-[11px] font-mono text-gray-500 hover:text-violet-400 transition-colors bg-dark-700 border border-dark-600 rounded-lg px-3 py-1.5">
+        <Cpu size={12} />Agent Trace {isOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+      </button>
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="mt-2 bg-dark-800 border border-dark-600 rounded-xl p-4 space-y-3 overflow-hidden">
+            <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+              <Zap size={12} className="text-violet-400" />
+              <span className="font-mono uppercase tracking-wider">Multi-Agent Pipeline</span>
+            </div>
+            {trace.map((step, i) => {
+              const Icon = agentIcons[step.agent] || Cpu
+              const color = agentColors[step.agent] || 'text-gray-400'
+              const label = agentLabels[step.agent] || step.agent
+              const isSuccess = step.status === 'success'
+              const isError = step.status === 'error'
+              return (
+                <div key={i} className="flex items-start gap-3">
+                  <div className={`mt-0.5 ${color}`}><Icon size={14} /></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-mono ${color}`}>{label}</span>
+                      {step.attempt && <span className="text-[10px] text-gray-600">attempt {step.attempt}</span>}
+                      {isSuccess && <CheckCircle2 size={12} className="text-emerald-400" />}
+                      {isError && <XCircle size={12} className="text-rose-400" />}
+                      {step.status === 'partial' && <AlertTriangle size={12} className="text-amber-400" />}
+                    </div>
+                    {step.rows !== undefined && <span className="text-[10px] text-gray-500">{step.rows} rows returned</span>}
+                    {step.error && <p className="text-[10px] text-rose-400/70 mt-0.5 truncate">{step.error}</p>}
+                  </div>
+                  {i < trace.length - 1 && <ArrowRight size={12} className="text-dark-600 mt-1 shrink-0" />}
+                </div>
+              )
+            })}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+// ─── Response Card (Copilot) ───
+
 function ResponseCard({ res, onAsk }) {
   const [sqlOpen, setSqlOpen] = useState(false)
   const [lineageOpen, setLineageOpen] = useState(false)
+  const [traceOpen, setTraceOpen] = useState(false)
+  const [shared, setShared] = useState(false)
+  const [copied, setCopied] = useState(false)
   const chartIcon = { line: <LineChartIcon size={14} />, bar: <BarChart3 size={14} />, pie: <PieChartIcon size={14} />, table: <Table2 size={14} />, number: <Hash size={14} /> }
+
+  async function handleShare() {
+    try {
+      const resp = await fetch(`${API}/api/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: res.sql ? 'Shared insight' : '', response: res }),
+      })
+      const { share_id } = await resp.json()
+      const url = `${window.location.origin}?share=${share_id}`
+      await navigator.clipboard.writeText(url)
+      setShared(true)
+      setTimeout(() => setShared(false), 3000)
+    } catch {}
+  }
+
+  function handleExport() {
+    const text = `Analytics Copilot Report\n${'='.repeat(40)}\n\nAnswer: ${res.answer}\n\nInsight: ${res.insight || 'N/A'}\n\nNarrative: ${res.narrative || 'N/A'}\n\nRecommendation: ${res.recommendation || 'N/A'}\n\nConfidence: ${res.confidence}\nTrust Score: ${res.trust_score}%\nRows: ${res.rows_returned}\nExecution: ${res.execution_time_ms}ms\n\nSQL:\n${res.sql}\n\nGenerated by Analytics Copilot — NTT DATA`
+    const blob = new Blob([text], { type: 'text/plain' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `copilot-report-${Date.now()}.txt`
+    a.click()
+  }
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
-      {/* Answer */}
+      {/* Answer + Narrative */}
       <div className="bg-dark-700 border border-dark-600 rounded-2xl p-5">
         <div className="flex items-start justify-between gap-3 mb-3">
           <p className="text-sm leading-relaxed text-gray-200">{res.answer}</p>
-          <ConfidenceBadge level={res.confidence} />
+          <div className="flex items-center gap-2 shrink-0">
+            {res.trust_score > 0 && <TrustBadge score={res.trust_score} />}
+            <ConfidenceBadge level={res.confidence} />
+          </div>
         </div>
+        {res.narrative && (
+          <div className="text-xs text-gray-400 leading-relaxed mb-3 pl-3 border-l-2 border-violet-400/30 italic">
+            {res.narrative}
+          </div>
+        )}
         {res.insight && <div className="flex items-start gap-2 text-xs text-teal-400/80 bg-teal-400/5 rounded-lg px-3 py-2"><Lightbulb size={13} className="mt-0.5 shrink-0" />{res.insight}</div>}
+        {res.recommendation && (
+          <div className="flex items-start gap-2 text-xs text-violet-400/80 bg-violet-400/5 rounded-lg px-3 py-2 mt-2">
+            <Sparkles size={13} className="mt-0.5 shrink-0" />{res.recommendation}
+          </div>
+        )}
       </div>
 
       {/* Chart */}
@@ -111,8 +259,8 @@ function ResponseCard({ res, onAsk }) {
         </div>
       )}
 
-      {/* SQL + Lineage toggles */}
-      <div className="flex gap-2">
+      {/* Toggles: SQL, Lineage, Agent Trace, Export, Share */}
+      <div className="flex gap-2 flex-wrap">
         <button onClick={() => setSqlOpen(!sqlOpen)} className="flex items-center gap-1.5 text-[11px] font-mono text-gray-500 hover:text-cyan-400 transition-colors bg-dark-700 border border-dark-600 rounded-lg px-3 py-1.5">
           <Database size={12} />SQL {sqlOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
         </button>
@@ -121,6 +269,14 @@ function ResponseCard({ res, onAsk }) {
             <Shield size={12} />Lineage {lineageOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
           </button>
         )}
+        <div className="ml-auto flex gap-2">
+          <button onClick={handleExport} className="flex items-center gap-1.5 text-[11px] font-mono text-gray-500 hover:text-amber-400 transition-colors bg-dark-700 border border-dark-600 rounded-lg px-3 py-1.5">
+            <FileText size={12} />Export
+          </button>
+          <button onClick={handleShare} className="flex items-center gap-1.5 text-[11px] font-mono text-gray-500 hover:text-violet-400 transition-colors bg-dark-700 border border-dark-600 rounded-lg px-3 py-1.5">
+            {shared ? <><Check size={12} className="text-emerald-400" />Copied!</> : <><Share2 size={12} />Share</>}
+          </button>
+        </div>
       </div>
 
       <AnimatePresence>
@@ -144,7 +300,10 @@ function ResponseCard({ res, onAsk }) {
         )}
       </AnimatePresence>
 
-      {/* Follow-up suggestions */}
+      {/* Agent Trace */}
+      <AgentPanel trace={res.agent_trace} isOpen={traceOpen} onToggle={() => setTraceOpen(!traceOpen)} />
+
+      {/* Follow-ups */}
       {(res.follow_ups?.length > 0 || res.follow_up) && (
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-xs text-gray-500">
@@ -164,7 +323,310 @@ function ResponseCard({ res, onAsk }) {
   )
 }
 
-export default function App() {
+// ─── Executive Dashboard ───
+
+function KpiCard({ kpi }) {
+  const fmtValue = (v, fmt) => {
+    if (v == null) return '—'
+    if (fmt === 'currency') return v >= 1000000 ? `$${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `$${(v / 1000).toFixed(0)}K` : `$${v.toFixed(0)}`
+    if (fmt === 'percentage') return `${v.toFixed(1)}%`
+    if (fmt === 'score') return v.toFixed(1)
+    return v.toLocaleString()
+  }
+
+  const statusIcon = {
+    on_track: <CheckCircle2 size={14} className="text-emerald-400" />,
+    warning: <AlertTriangle size={14} className="text-amber-400" />,
+    critical: <XCircle size={14} className="text-rose-400" />,
+  }
+
+  const sparkColor = kpi.status === 'critical' ? '#FF6B8A' : kpi.status === 'warning' ? '#FFB547' : '#00D4FF'
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-dark-700 border border-dark-600 rounded-2xl p-5 hover:border-dark-600/80 transition-colors">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs font-mono text-gray-500 uppercase tracking-wider">{kpi.display_name}</span>
+        {statusIcon[kpi.status]}
+      </div>
+      <div className="flex items-end justify-between">
+        <div>
+          <span className="font-display text-2xl text-gray-100 italic">{fmtValue(kpi.value, kpi.format)}</span>
+          {kpi.change_pct != null && (
+            <span className={`ml-2 text-xs font-mono ${kpi.change_pct >= 0 ? 'text-emerald-400' : 'text-rose-400'} flex items-center gap-0.5 inline-flex`}>
+              {kpi.change_pct >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+              {kpi.change_pct >= 0 ? '+' : ''}{kpi.change_pct}%
+            </span>
+          )}
+        </div>
+        {kpi.target && <span className="text-[10px] text-gray-600 font-mono">target: {fmtValue(kpi.target, kpi.format)}</span>}
+      </div>
+      <div className="mt-3 h-8">
+        <Sparkline data={kpi.sparkline} color={sparkColor} />
+      </div>
+    </motion.div>
+  )
+}
+
+function InsightCard({ insight }) {
+  const severityStyles = {
+    positive: { bg: 'bg-emerald-400/5', border: 'border-emerald-400/20', icon: <TrendingUp size={14} className="text-emerald-400" /> },
+    info: { bg: 'bg-cyan-400/5', border: 'border-cyan-400/20', icon: <Lightbulb size={14} className="text-cyan-400" /> },
+    warning: { bg: 'bg-amber-400/5', border: 'border-amber-400/20', icon: <AlertTriangle size={14} className="text-amber-400" /> },
+    critical: { bg: 'bg-rose-400/5', border: 'border-rose-400/20', icon: <XCircle size={14} className="text-rose-400" /> },
+  }
+  const s = severityStyles[insight.severity] || severityStyles.info
+  return (
+    <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className={`${s.bg} ${s.border} border rounded-xl p-4`}>
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5">{s.icon}</div>
+        <div>
+          <p className="text-sm font-medium text-gray-200">{insight.title}</p>
+          <p className="text-xs text-gray-400 mt-1 leading-relaxed">{insight.description}</p>
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
+function DashboardTab() {
+  const [kpiData, setKpiData] = useState(null)
+  const [insights, setInsights] = useState(null)
+  const [businessUnits, setBusinessUnits] = useState([])
+  const [selectedBu, setSelectedBu] = useState('')
+  const [loadingKpis, setLoadingKpis] = useState(true)
+  const [loadingInsights, setLoadingInsights] = useState(true)
+
+  useEffect(() => {
+    fetch(`${API}/api/dashboard/business-units`).then(r => r.json()).then(setBusinessUnits).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    setLoadingKpis(true)
+    setLoadingInsights(true)
+    const buParam = selectedBu ? `?bu=${encodeURIComponent(selectedBu)}` : ''
+    fetch(`${API}/api/dashboard/kpis${buParam}`)
+      .then(r => r.json()).then(d => { setKpiData(d); setLoadingKpis(false) }).catch(() => setLoadingKpis(false))
+    fetch(`${API}/api/dashboard/insights${buParam}`)
+      .then(r => r.json()).then(d => { setInsights(d); setLoadingInsights(false) }).catch(() => setLoadingInsights(false))
+  }, [selectedBu])
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-display text-3xl italic text-gray-100">Executive Dashboard</h2>
+          <p className="text-xs text-gray-500 mt-1 font-mono">Real-time KPIs with AI-generated insights</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 bg-dark-700 border border-dark-600 rounded-lg px-3 py-1.5">
+            <Filter size={12} className="text-gray-500" />
+            <select value={selectedBu} onChange={e => setSelectedBu(e.target.value)} className="bg-transparent text-xs text-gray-300 outline-none cursor-pointer">
+              <option value="">All Business Units</option>
+              {businessUnits.map(bu => <option key={bu.id} value={bu.name}>{bu.name}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* KPI Cards */}
+      {loadingKpis ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-36" />)}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {kpiData?.kpis?.map((kpi, i) => <KpiCard key={kpi.key} kpi={kpi} />)}
+        </div>
+      )}
+
+      {/* AI Insights */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <Brain size={16} className="text-violet-400" />
+          <h3 className="text-sm font-semibold text-gray-200">AI-Generated Insights</h3>
+          {loadingInsights && <RefreshCw size={12} className="text-gray-500 animate-spin" />}
+        </div>
+        {loadingInsights ? (
+          <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+        ) : (
+          <div className="space-y-3">
+            {insights?.insights?.map((ins, i) => <InsightCard key={i} insight={ins} />)}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Governance Tab ───
+
+function GovernanceTab() {
+  const [quality, setQuality] = useState(null)
+  const [auditData, setAuditData] = useState([])
+  const [lineageGraph, setLineageGraph] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [activeSection, setActiveSection] = useState('quality')
+
+  useEffect(() => {
+    Promise.all([
+      fetch(`${API}/api/governance/quality`).then(r => r.json()),
+      fetch(`${API}/api/governance/audit`).then(r => r.json()),
+      fetch(`${API}/api/governance/lineage-graph`).then(r => r.json()),
+    ]).then(([q, a, l]) => {
+      setQuality(q)
+      setAuditData(a)
+      setLineageGraph(l)
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }, [])
+
+  const sections = [
+    { id: 'quality', label: 'Data Quality', icon: CheckCircle2 },
+    { id: 'audit', label: 'Audit Log', icon: Eye },
+    { id: 'lineage', label: 'Lineage', icon: Share2 },
+  ]
+
+  if (loading) {
+    return <div className="space-y-4">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24" />)}</div>
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="font-display text-3xl italic text-gray-100">Data Governance</h2>
+        <p className="text-xs text-gray-500 mt-1 font-mono">Quality monitoring, audit trail, and data lineage</p>
+      </div>
+
+      {/* Section tabs */}
+      <div className="flex gap-2">
+        {sections.map(s => {
+          const Icon = s.icon
+          return (
+            <button key={s.id} onClick={() => setActiveSection(s.id)} className={`flex items-center gap-2 text-xs font-mono px-4 py-2 rounded-lg transition-all ${activeSection === s.id ? 'bg-cyan-400/10 text-cyan-400 border border-cyan-400/20' : 'text-gray-500 bg-dark-700 border border-dark-600 hover:text-gray-300'}`}>
+              <Icon size={14} />{s.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Quality Section */}
+      {activeSection === 'quality' && quality && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+          {/* Overall score */}
+          <div className="bg-dark-700 border border-dark-600 rounded-2xl p-5 flex items-center gap-6">
+            <div>
+              <span className="text-xs font-mono text-gray-500">OVERALL QUALITY</span>
+              <div className="font-display text-4xl italic text-emerald-400">{(quality.overall_quality * 100).toFixed(1)}%</div>
+            </div>
+            <div className="flex-1 h-3 bg-dark-800 rounded-full overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 rounded-full transition-all" style={{ width: `${quality.overall_quality * 100}%` }} />
+            </div>
+            <span className="text-xs font-mono text-gray-500">{quality.total_tables} tables tracked</span>
+          </div>
+
+          {/* Table cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {quality.tables.map(t => {
+              const freshnessColor = { fresh: 'text-emerald-400', aging: 'text-amber-400', stale: 'text-rose-400' }
+              return (
+                <div key={t.table_name} className="bg-dark-700 border border-dark-600 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-mono text-sm text-cyan-400">{t.table_name}</span>
+                    <span className={`text-[10px] font-mono ${freshnessColor[t.freshness]}`}>{t.freshness}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-gray-400">
+                    <div>Source: <span className="text-gray-300">{t.source_system}</span></div>
+                    <div>Refresh: <span className="text-gray-300">{t.refresh_frequency}</span></div>
+                    <div>Quality: <span className={`font-mono ${t.quality_score >= 0.95 ? 'text-emerald-400' : 'text-amber-400'}`}>{(t.quality_score * 100).toFixed(0)}%</span></div>
+                    <div>Owner: <span className="text-gray-300">{t.owner}</span></div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </motion.div>
+      )}
+
+      {/* Audit Log Section */}
+      {activeSection === 'audit' && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          {auditData.length === 0 ? (
+            <div className="text-center py-12 text-gray-500">
+              <Eye size={32} className="mx-auto mb-3 opacity-50" />
+              <p className="text-sm">No queries logged yet. Ask questions in the Copilot to build the audit trail.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {auditData.map((entry, i) => (
+                <div key={i} className="bg-dark-700 border border-dark-600 rounded-xl p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-200 truncate">{entry.question}</p>
+                      <div className="flex items-center gap-3 mt-1.5 text-[10px] font-mono text-gray-500">
+                        <span>{entry.rows} rows</span>
+                        <span>{entry.execution_time_ms}ms</span>
+                        <ConfidenceBadge level={entry.confidence} />
+                        {entry.trust_score && <TrustBadge score={entry.trust_score} />}
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono text-gray-600 shrink-0">{new Date(entry.timestamp).toLocaleTimeString()}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* Lineage Section */}
+      {activeSection === 'lineage' && lineageGraph && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+          <div className="bg-dark-700 border border-dark-600 rounded-2xl p-6">
+            <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">
+              <Share2 size={14} className="text-violet-400" />
+              <span className="font-mono uppercase tracking-wider">Data Flow Diagram</span>
+            </div>
+            <div className="flex items-center justify-center gap-4 flex-wrap">
+              {/* Sources */}
+              <div className="space-y-2">
+                <span className="text-[10px] font-mono text-gray-600 uppercase">Sources</span>
+                {lineageGraph.nodes.filter(n => n.type === 'source').map(n => (
+                  <div key={n.id} className="bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2 text-xs text-amber-400 font-mono">{n.label}</div>
+                ))}
+              </div>
+              <div className="flex flex-col items-center gap-1">{[...Array(3)].map((_, i) => <ArrowRight key={i} size={14} className="text-dark-600" />)}</div>
+              {/* Tables */}
+              <div className="space-y-2">
+                <span className="text-[10px] font-mono text-gray-600 uppercase">Data Lake</span>
+                {lineageGraph.nodes.filter(n => n.type === 'table').map(n => (
+                  <div key={n.id} className="bg-cyan-400/10 border border-cyan-400/20 rounded-lg px-3 py-2 text-xs text-cyan-400 font-mono flex items-center gap-2">
+                    {n.label}
+                    {n.quality && <span className="text-[10px] text-emerald-400">{(n.quality * 100).toFixed(0)}%</span>}
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-col items-center gap-1">{[...Array(3)].map((_, i) => <ArrowRight key={i} size={14} className="text-dark-600" />)}</div>
+              {/* Consumer */}
+              <div className="space-y-2">
+                <span className="text-[10px] font-mono text-gray-600 uppercase">Consumer</span>
+                {lineageGraph.nodes.filter(n => n.type === 'consumer').map(n => (
+                  <div key={n.id} className="bg-violet-400/10 border border-violet-400/20 rounded-lg px-3 py-2 text-xs text-violet-400 font-mono flex items-center gap-2">
+                    <Brain size={12} />{n.label}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </div>
+  )
+}
+
+// ─── Copilot Chat Tab ───
+
+function CopilotTab() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -204,49 +666,28 @@ export default function App() {
   const empty = messages.length === 0 && !loading
 
   return (
-    <div className="h-screen flex flex-col">
-      {/* Header */}
-      <header className="flex items-center gap-4 px-6 py-3 border-b border-dark-600 bg-dark-900/80 backdrop-blur-md shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-violet-400 flex items-center justify-center"><Brain size={18} className="text-dark-900" /></div>
-          <div>
-            <h1 className="text-sm font-semibold tracking-tight">Analytics Copilot</h1>
-            <p className="text-[10px] text-gray-500 font-mono tracking-wider">AUTONOMOUS INTELLIGENCE · POC</p>
-          </div>
-        </div>
-        <div className="ml-auto flex items-center gap-4 text-[10px] font-mono text-gray-500">
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>GPT-4o</span>
-          <span className="flex items-center gap-1"><Database size={10} />PostgreSQL</span>
-          <span className="flex items-center gap-1"><Shield size={10} />Lineage Active</span>
-        </div>
-      </header>
-
-      {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-6 py-6">
-        <div className="max-w-3xl mx-auto space-y-6">
-          {/* Welcome state */}
+    <div className="flex flex-col h-full">
+      <div className="flex-1 overflow-y-auto">
+        <div className="space-y-6">
           {empty && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="pt-16 text-center">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="pt-12 text-center">
               <h2 className="font-display text-4xl italic text-gray-200 mb-2">Ask anything about your data</h2>
-              <p className="text-sm text-gray-500 mb-10">Natural language → SQL → Insights → Charts. Powered by GPT-4o with full transparency.</p>
+              <p className="text-sm text-gray-500 mb-10">Multi-agent pipeline: SQL → Analysis → Narrative. Full transparency.</p>
               <div className="grid grid-cols-2 gap-2 max-w-xl mx-auto">
                 {suggestions.map((s, i) => (
                   <button key={i} onClick={() => ask(s)} className="text-left text-xs text-gray-400 bg-dark-700 hover:bg-dark-600 border border-dark-600 hover:border-cyan-400/20 rounded-xl px-4 py-3 transition-all hover:-translate-y-0.5">
-                    <Sparkles size={12} className="text-cyan-400/50 mb-1.5" />
-                    {s}
+                    <Sparkles size={12} className="text-cyan-400/50 mb-1.5" />{s}
                   </button>
                 ))}
               </div>
-              {/* Pillar badges */}
-              <div className="flex items-center justify-center gap-3 mt-12 flex-wrap">
-                {['Agentic AI', 'AI-Native Data', 'Responsible AI', 'Analytics Copilot'].map(p => (
+              <div className="flex items-center justify-center gap-3 mt-10 flex-wrap">
+                {['Multi-Agent AI', 'Semantic Layer', 'Responsible AI', 'Data Governance'].map(p => (
                   <span key={p} className="text-[10px] font-mono text-cyan-400/50 border border-cyan-400/10 rounded-full px-3 py-1">{p}</span>
                 ))}
               </div>
             </motion.div>
           )}
 
-          {/* Conversation */}
           {messages.map((msg, i) => (
             <div key={i}>
               {msg.type === 'user' && (
@@ -265,13 +706,19 @@ export default function App() {
             </div>
           ))}
 
-          {/* Loading */}
           {loading && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-3 thinking bg-dark-700 border border-cyan-400/10 rounded-2xl px-5 py-4 max-w-xs">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-3 bg-dark-700 border border-cyan-400/10 rounded-2xl px-5 py-4 max-w-sm">
               <div className="flex gap-1">
                 {[0, 1, 2].map(i => <motion.div key={i} className="w-1.5 h-1.5 rounded-full bg-cyan-400" animate={{ opacity: [0.3, 1, 0.3] }} transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.2 }} />)}
               </div>
-              <span className="text-xs text-gray-400">Analyzing data...</span>
+              <span className="text-xs text-gray-400">Agents analyzing...</span>
+              <div className="flex items-center gap-1 text-[10px] font-mono text-gray-600">
+                <Database size={10} className="text-cyan-400/50" />
+                <ArrowRight size={8} />
+                <Activity size={10} className="text-violet-400/50" />
+                <ArrowRight size={8} />
+                <FileText size={10} className="text-teal-400/50" />
+              </div>
             </motion.div>
           )}
           <div ref={bottomRef} />
@@ -279,8 +726,8 @@ export default function App() {
       </div>
 
       {/* Input */}
-      <div className="shrink-0 border-t border-dark-600 bg-dark-900/80 backdrop-blur-md px-6 py-4">
-        <div className="max-w-3xl mx-auto flex gap-3">
+      <div className="shrink-0 pt-4">
+        <div className="flex gap-3">
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -293,10 +740,98 @@ export default function App() {
             <Send size={16} />Ask
           </button>
         </div>
-        <p className="max-w-3xl mx-auto text-[10px] text-gray-600 mt-2 text-center font-mono">
-          Powered by GPT-4o · SQL generated in real-time · Full data lineage and transparency
+        <p className="text-[10px] text-gray-600 mt-2 text-center font-mono">
+          Multi-Agent Pipeline · SQL Agent → Analysis Agent → Narrative Agent · Full transparency
         </p>
       </div>
+    </div>
+  )
+}
+
+// ─── Main App ───
+
+function SharedReportView({ shareId }) {
+  const [report, setReport] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    fetch(`${API}/api/share/${shareId}`)
+      .then(r => { if (!r.ok) throw new Error('Report not found'); return r.json() })
+      .then(setReport)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [shareId])
+
+  if (loading) return <div className="min-h-screen bg-dark-900 flex items-center justify-center"><Skeleton className="w-96 h-48" /></div>
+  if (error) return <div className="min-h-screen bg-dark-900 flex items-center justify-center text-rose-400">{error}</div>
+
+  return (
+    <div className="min-h-screen bg-dark-900 text-white p-6">
+      <div className="max-w-3xl mx-auto">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-violet-400 flex items-center justify-center"><Brain size={18} className="text-dark-900" /></div>
+          <div>
+            <h1 className="text-sm font-semibold">Shared Analytics Report</h1>
+            <p className="text-[10px] text-gray-500 font-mono">Analytics Copilot — NTT DATA</p>
+          </div>
+          <button onClick={() => { window.location.href = window.location.origin }} className="ml-auto text-xs text-cyan-400 hover:text-cyan-300 font-mono">Open Copilot →</button>
+        </div>
+        {report?.response && <ResponseCard res={report.response} onAsk={() => { window.location.href = window.location.origin }} />}
+      </div>
+    </div>
+  )
+}
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('dashboard')
+  const shareId = useMemo(() => new URLSearchParams(window.location.search).get('share'), [])
+
+  if (shareId) return <SharedReportView shareId={shareId} />
+
+  return (
+    <div className="h-screen flex flex-col">
+      {/* Header */}
+      <header className="flex items-center gap-4 px-6 py-3 border-b border-dark-600 bg-dark-900/80 backdrop-blur-md shrink-0">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-violet-400 flex items-center justify-center"><Brain size={18} className="text-dark-900" /></div>
+          <div>
+            <h1 className="text-sm font-semibold tracking-tight">Analytics Copilot</h1>
+            <p className="text-[10px] text-gray-500 font-mono tracking-wider">AUTONOMOUS INTELLIGENCE · NTT DATA</p>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <nav className="ml-8 flex items-center gap-1">
+          {TABS.map(tab => {
+            const Icon = tab.icon
+            const active = activeTab === tab.id
+            return (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-2 text-xs font-mono px-4 py-2 rounded-lg transition-all ${active ? 'bg-cyan-400/10 text-cyan-400 border border-cyan-400/20' : 'text-gray-500 hover:text-gray-300 border border-transparent'}`}>
+                <Icon size={14} />{tab.label}
+              </button>
+            )
+          })}
+        </nav>
+
+        <div className="ml-auto flex items-center gap-4 text-[10px] font-mono text-gray-500">
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />GPT-4o</span>
+          <span className="flex items-center gap-1"><Database size={10} />PostgreSQL</span>
+          <span className="flex items-center gap-1"><Cpu size={10} />3 Agents</span>
+          <span className="flex items-center gap-1"><Shield size={10} />Governance</span>
+        </div>
+      </header>
+
+      {/* Content */}
+      <main className="flex-1 overflow-y-auto px-6 py-6">
+        <div className="max-w-5xl mx-auto">
+          <AnimatePresence mode="wait">
+            {activeTab === 'dashboard' && <motion.div key="dashboard" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}><DashboardTab /></motion.div>}
+            {activeTab === 'copilot' && <motion.div key="copilot" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="h-[calc(100vh-10rem)]"><CopilotTab /></motion.div>}
+            {activeTab === 'governance' && <motion.div key="governance" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}><GovernanceTab /></motion.div>}
+          </AnimatePresence>
+        </div>
+      </main>
     </div>
   )
 }
