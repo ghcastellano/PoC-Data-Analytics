@@ -196,6 +196,12 @@ Chart type selection:
 - table: for detailed multi-column data
 - number: for single KPI values
 
+CRITICAL CHART RULE — y_key scale:
+- NEVER put metrics of vastly different scales on the same y_key array. For example, revenue (millions) and nps_score (30-75) or churn_rate (2-5%) must NOT share the same chart axis.
+- If the data has multiple columns with different scales (e.g. revenue + nps + churn), pick ONLY ONE metric for y_key on a line/bar chart, or use chart_type "table" to show all columns.
+- You MAY combine metrics of similar magnitude (e.g. revenue and pipeline, both in millions).
+- When the user asks to see multiple metrics of different scales together, prefer chart_type "table".
+
 Use executive tone. Be concise. Reference specific numbers. Make recommendations actionable."""
 
 

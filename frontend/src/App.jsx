@@ -54,9 +54,19 @@ function Chart({ type, data, config }) {
   if (!data?.length) return null
   const xKey = config?.x_key || Object.keys(data[0])[0]
   const yKey = config?.y_key || Object.keys(data[0])[1]
-  const yKeys = Array.isArray(yKey) ? yKey : [yKey]
+  let yKeys = Array.isArray(yKey) ? yKey : [yKey]
   const fmt = (v) => typeof v === 'number' ? (v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v.toFixed(1)) : v
   const common = { style: { fontSize: 11, fill: '#8B9DC3' } }
+
+  // Scale guard: if multiple y_keys have vastly different magnitudes, fall back to table
+  if (yKeys.length > 1 && (type === 'line' || type === 'bar')) {
+    const maxVals = yKeys.map(k => Math.max(...data.map(d => Math.abs(Number(d[k]) || 0))))
+    const largest = Math.max(...maxVals)
+    const smallest = Math.min(...maxVals.filter(v => v > 0))
+    if (largest > 0 && smallest > 0 && largest / smallest > 50) {
+      type = 'table' // auto-downgrade to table when scales are incompatible
+    }
+  }
 
   if (type === 'number') {
     const val = data[0]?.[Object.keys(data[0])[0]] ?? data[0]?.[Object.keys(data[0])[1]]
