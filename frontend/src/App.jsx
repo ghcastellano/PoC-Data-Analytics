@@ -118,65 +118,133 @@ function Chart({ type, data, config }) {
 
 // ─── Sparkline Mini Chart ───
 
-function Sparkline({ data, color = '#00D4FF', height = 32 }) {
+function Sparkline({ data, color = '#00D4FF', height = 40 }) {
   if (!data?.length) return null
+  const gradientId = `spark-${color.replace('#', '')}-${data.length}`
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <AreaChart data={data.map((v, i) => ({ v, i }))}>
+      <AreaChart data={data.map((v, i) => ({ v, i }))} margin={{ top: 4, right: 2, bottom: 4, left: 2 }}>
         <defs>
-          <linearGradient id={`spark-${color.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity={0.3} />
-            <stop offset="100%" stopColor={color} stopOpacity={0} />
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.4} />
+            <stop offset="100%" stopColor={color} stopOpacity={0.05} />
           </linearGradient>
         </defs>
-        <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} fill={`url(#spark-${color.replace('#', '')})`} dot={false} />
+        <YAxis domain={['dataMin', 'dataMax']} hide />
+        <Area type="monotone" dataKey="v" stroke={color} strokeWidth={2} fill={`url(#${gradientId})`} dot={false} />
       </AreaChart>
     </ResponsiveContainer>
   )
 }
 
-// ─── Agent Reasoning Panel ───
+// ─── Agent Reasoning Panel (Rich Detail) ───
 
-function AgentPanel({ trace, isOpen, onToggle }) {
+function AgentPanel({ trace, response, isOpen, onToggle }) {
   if (!trace?.length) return null
 
   const agentColors = { sql: 'text-cyan-400', analysis: 'text-violet-400', narrative: 'text-teal-400' }
+  const agentBgColors = { sql: 'bg-cyan-400/5 border-cyan-400/15', analysis: 'bg-violet-400/5 border-violet-400/15', narrative: 'bg-teal-400/5 border-teal-400/15' }
   const agentIcons = { sql: Database, analysis: Activity, narrative: FileText }
   const agentLabels = { sql: 'SQL Agent', analysis: 'Analysis Agent', narrative: 'Narrative Agent' }
 
+  const totalMs = trace.reduce((sum, t) => sum + (t.duration_ms || 0), 0)
+  const successSteps = trace.filter(t => t.status === 'success' || t.status === 'partial')
+
   return (
-    <div className="mt-2">
-      <button onClick={onToggle} className="flex items-center gap-1.5 text-[11px] font-mono text-gray-500 hover:text-violet-400 transition-colors bg-dark-700 border border-dark-600 rounded-lg px-3 py-1.5">
-        <Cpu size={12} />Agent Trace {isOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+    <div className="mt-3">
+      <button onClick={onToggle} className="flex items-center gap-2 text-[11px] font-mono text-gray-400 hover:text-violet-400 transition-colors bg-dark-700 border border-dark-600 rounded-lg px-3 py-2 w-full justify-between">
+        <div className="flex items-center gap-2">
+          <Cpu size={12} className="text-violet-400" />
+          <span>Agent Pipeline Trace</span>
+          <span className="text-dark-600">|</span>
+          <span className="text-violet-400">{successSteps.length} agents</span>
+          <span className="text-dark-600">|</span>
+          <span className="text-cyan-400">{totalMs}ms total</span>
+        </div>
+        {isOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
       </button>
+
+      {/* Pipeline Timeline Bar */}
+      {isOpen && totalMs > 0 && (
+        <div className="mt-2 flex h-2 rounded-full overflow-hidden bg-dark-800 border border-dark-600">
+          {trace.filter(t => t.duration_ms).map((t, i) => {
+            const pct = ((t.duration_ms || 0) / totalMs) * 100
+            const colors = { sql: 'bg-cyan-400', analysis: 'bg-violet-400', narrative: 'bg-teal-400' }
+            return <div key={i} className={`${colors[t.agent] || 'bg-gray-600'} h-full`} style={{ width: `${pct}%` }} title={`${agentLabels[t.agent]}: ${t.duration_ms}ms`} />
+          })}
+        </div>
+      )}
+
       <AnimatePresence>
         {isOpen && (
-          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="mt-2 bg-dark-800 border border-dark-600 rounded-xl p-4 space-y-3 overflow-hidden">
-            <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
-              <Zap size={12} className="text-violet-400" />
-              <span className="font-mono uppercase tracking-wider">Multi-Agent Pipeline</span>
-            </div>
-            {trace.map((step, i) => {
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="mt-2 space-y-2 overflow-hidden">
+            {trace.filter(t => t.status === 'success' || t.status === 'partial').map((step, i) => {
               const Icon = agentIcons[step.agent] || Cpu
               const color = agentColors[step.agent] || 'text-gray-400'
+              const bgColor = agentBgColors[step.agent] || 'bg-dark-800 border-dark-600'
               const label = agentLabels[step.agent] || step.agent
-              const isSuccess = step.status === 'success'
-              const isError = step.status === 'error'
+
               return (
-                <div key={i} className="flex items-start gap-3">
-                  <div className={`mt-0.5 ${color}`}><Icon size={14} /></div>
-                  <div className="flex-1 min-w-0">
+                <div key={i} className={`${bgColor} border rounded-xl p-4`}>
+                  {/* Agent Header */}
+                  <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
-                      <span className={`text-xs font-mono ${color}`}>{label}</span>
-                      {step.attempt && <span className="text-[10px] text-gray-600">attempt {step.attempt}</span>}
-                      {isSuccess && <CheckCircle2 size={12} className="text-emerald-400" />}
-                      {isError && <XCircle size={12} className="text-rose-400" />}
+                      <Icon size={14} className={color} />
+                      <span className={`text-xs font-mono font-semibold ${color}`}>{label}</span>
+                      {step.attempt && <span className="text-[10px] text-gray-600 bg-dark-800 px-1.5 py-0.5 rounded">attempt {step.attempt}</span>}
+                      {step.status === 'success' && <CheckCircle2 size={12} className="text-emerald-400" />}
                       {step.status === 'partial' && <AlertTriangle size={12} className="text-amber-400" />}
                     </div>
-                    {step.rows !== undefined && <span className="text-[10px] text-gray-500">{step.rows} rows returned</span>}
-                    {step.error && <p className="text-[10px] text-rose-400/70 mt-0.5 truncate">{step.error}</p>}
+                    {step.duration_ms != null && (
+                      <span className="text-[10px] font-mono text-gray-500 flex items-center gap-1"><Clock size={10} />{step.duration_ms}ms</span>
+                    )}
                   </div>
-                  {i < trace.length - 1 && <ArrowRight size={12} className="text-dark-600 mt-1 shrink-0" />}
+
+                  {/* Reasoning */}
+                  {step.reasoning && <p className="text-[11px] text-gray-400 leading-relaxed mb-2 italic">{step.reasoning}</p>}
+
+                  {/* SQL Agent Detail */}
+                  {step.agent === 'sql' && step.sql && (
+                    <pre className="text-[10px] font-mono text-cyan-400/70 bg-dark-800 rounded-lg p-2.5 overflow-x-auto mt-1 max-h-24 overflow-y-auto">{step.sql}</pre>
+                  )}
+                  {step.agent === 'sql' && step.rows !== undefined && (
+                    <div className="flex items-center gap-3 mt-2 text-[10px] text-gray-500">
+                      <span className="flex items-center gap-1"><Rows3 size={10} />{step.rows} rows</span>
+                      {step.tables_used && <span className="flex items-center gap-1"><Database size={10} />{step.tables_used.length} tables joined</span>}
+                    </div>
+                  )}
+
+                  {/* Analysis Agent Detail */}
+                  {step.agent === 'analysis' && step.findings && (
+                    <div className="space-y-1.5 mt-1">
+                      {step.findings.trends?.length > 0 && (
+                        <div className="flex items-start gap-2 text-[10px]">
+                          <TrendingUp size={10} className="text-emerald-400 mt-0.5 shrink-0" />
+                          <div className="text-gray-400"><span className="text-emerald-400 font-semibold">{step.findings.trends_count} trend(s):</span> {step.findings.trends.join(' | ')}</div>
+                        </div>
+                      )}
+                      {step.findings.outliers?.length > 0 && (
+                        <div className="flex items-start gap-2 text-[10px]">
+                          <AlertTriangle size={10} className="text-amber-400 mt-0.5 shrink-0" />
+                          <div className="text-gray-400"><span className="text-amber-400 font-semibold">{step.findings.outliers_count} outlier(s):</span> {step.findings.outliers.join(' | ')}</div>
+                        </div>
+                      )}
+                      {step.findings.risk_flags?.length > 0 && (
+                        <div className="flex items-start gap-2 text-[10px]">
+                          <XCircle size={10} className="text-rose-400 mt-0.5 shrink-0" />
+                          <div className="text-gray-400"><span className="text-rose-400 font-semibold">{step.findings.risk_flags_count} risk flag(s):</span> {step.findings.risk_flags.join(' | ')}</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Narrative Agent Detail */}
+                  {step.agent === 'narrative' && (
+                    <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500">
+                      {step.confidence && <ConfidenceBadge level={step.confidence} />}
+                      {step.chart_selected && <span className="flex items-center gap-1 text-teal-400"><BarChart3 size={10} />Chart: {step.chart_selected}</span>}
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -192,7 +260,7 @@ function AgentPanel({ trace, isOpen, onToggle }) {
 function ResponseCard({ res, onAsk }) {
   const [sqlOpen, setSqlOpen] = useState(false)
   const [lineageOpen, setLineageOpen] = useState(false)
-  const [traceOpen, setTraceOpen] = useState(false)
+  const [traceOpen, setTraceOpen] = useState(true)
   const [shared, setShared] = useState(false)
   const [copied, setCopied] = useState(false)
   const chartIcon = { line: <LineChartIcon size={14} />, bar: <BarChart3 size={14} />, pie: <PieChartIcon size={14} />, table: <Table2 size={14} />, number: <Hash size={14} /> }
@@ -301,7 +369,7 @@ function ResponseCard({ res, onAsk }) {
       </AnimatePresence>
 
       {/* Agent Trace */}
-      <AgentPanel trace={res.agent_trace} isOpen={traceOpen} onToggle={() => setTraceOpen(!traceOpen)} />
+      <AgentPanel trace={res.agent_trace} response={res} isOpen={traceOpen} onToggle={() => setTraceOpen(!traceOpen)} />
 
       {/* Follow-ups */}
       {(res.follow_ups?.length > 0 || res.follow_up) && (
@@ -360,8 +428,8 @@ function KpiCard({ kpi }) {
         </div>
         {kpi.target && <span className="text-[10px] text-gray-600 font-mono">target: {fmtValue(kpi.target, kpi.format)}</span>}
       </div>
-      <div className="mt-3 h-8">
-        <Sparkline data={kpi.sparkline} color={sparkColor} />
+      <div className="mt-3 h-10">
+        <Sparkline data={kpi.sparkline} color={sparkColor} height={40} />
       </div>
     </motion.div>
   )
@@ -379,9 +447,10 @@ function InsightCard({ insight }) {
     <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className={`${s.bg} ${s.border} border rounded-xl p-4`}>
       <div className="flex items-start gap-3">
         <div className="mt-0.5">{s.icon}</div>
-        <div>
+        <div className="flex-1">
           <p className="text-sm font-medium text-gray-200">{insight.title}</p>
           <p className="text-xs text-gray-400 mt-1 leading-relaxed">{insight.description}</p>
+          <span className="inline-flex items-center gap-1 mt-2 text-[9px] font-mono text-violet-400/70 bg-violet-400/10 px-1.5 py-0.5 rounded"><Brain size={8} />AI Agent Insight</span>
         </div>
       </div>
     </motion.div>
@@ -461,10 +530,71 @@ function DashboardTab() {
 
 // ─── Governance Tab ───
 
+function AuditEntryCard({ entry }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div className="bg-dark-700 border border-dark-600 rounded-xl p-4">
+      <div className="flex items-start justify-between gap-4 cursor-pointer" onClick={() => setExpanded(!expanded)}>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm text-gray-200 truncate">{entry.question}</p>
+          <div className="flex items-center gap-3 mt-1.5 text-[10px] font-mono text-gray-500 flex-wrap">
+            <span>{entry.rows} rows</span>
+            <span>{entry.execution_time_ms}ms</span>
+            <ConfidenceBadge level={entry.confidence} />
+            {entry.trust_score > 0 && <TrustBadge score={entry.trust_score} />}
+            {entry.agent_breakdown && (
+              <span className="text-violet-400/70 flex items-center gap-1"><Cpu size={10} />{entry.agent_breakdown.length} agents</span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[10px] font-mono text-gray-600">{new Date(entry.timestamp).toLocaleTimeString()}</span>
+          {entry.agent_breakdown && (expanded ? <ChevronUp size={12} className="text-gray-600" /> : <ChevronDown size={12} className="text-gray-600" />)}
+        </div>
+      </div>
+      <AnimatePresence>
+        {expanded && entry.agent_breakdown && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="mt-3 pt-3 border-t border-dark-600 space-y-2 overflow-hidden">
+            {entry.agent_breakdown.map((ab, j) => {
+              const agentColors = { sql: 'text-cyan-400', analysis: 'text-violet-400', narrative: 'text-teal-400' }
+              const agentIcons = { sql: Database, analysis: Activity, narrative: FileText }
+              const agentLabels = { sql: 'SQL Agent', analysis: 'Analysis Agent', narrative: 'Narrative Agent' }
+              const Icon = agentIcons[ab.agent] || Cpu
+              return (
+                <div key={j} className="flex items-start gap-3 text-[11px]">
+                  <Icon size={12} className={`${agentColors[ab.agent] || 'text-gray-400'} mt-0.5 shrink-0`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`font-mono font-semibold ${agentColors[ab.agent] || 'text-gray-400'}`}>{agentLabels[ab.agent] || ab.agent}</span>
+                      <span className="text-gray-600 flex items-center gap-1"><Clock size={10} />{ab.duration_ms}ms</span>
+                    </div>
+                    {ab.reasoning && <p className="text-gray-500 mt-0.5 italic text-[10px] leading-relaxed">{ab.reasoning}</p>}
+                  </div>
+                </div>
+              )
+            })}
+            {entry.analysis_summary && (entry.analysis_summary.trends?.length > 0 || entry.analysis_summary.risk_flags?.length > 0) && (
+              <div className="mt-2 pt-2 border-t border-dark-600 space-y-1">
+                {entry.analysis_summary.trends?.map((t, k) => (
+                  <div key={k} className="flex items-start gap-2 text-[10px]"><TrendingUp size={10} className="text-emerald-400 mt-0.5 shrink-0" /><span className="text-gray-400">{t}</span></div>
+                ))}
+                {entry.analysis_summary.risk_flags?.map((f, k) => (
+                  <div key={k} className="flex items-start gap-2 text-[10px]"><AlertTriangle size={10} className="text-rose-400 mt-0.5 shrink-0" /><span className="text-gray-400">{f}</span></div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 function GovernanceTab() {
   const [quality, setQuality] = useState(null)
   const [auditData, setAuditData] = useState([])
   const [lineageGraph, setLineageGraph] = useState(null)
+  const [agentStats, setAgentStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [activeSection, setActiveSection] = useState('quality')
 
@@ -473,10 +603,12 @@ function GovernanceTab() {
       fetch(`${API}/api/governance/quality`).then(r => r.json()),
       fetch(`${API}/api/governance/audit`).then(r => r.json()),
       fetch(`${API}/api/governance/lineage-graph`).then(r => r.json()),
-    ]).then(([q, a, l]) => {
+      fetch(`${API}/api/governance/agent-stats`).then(r => r.json()),
+    ]).then(([q, a, l, s]) => {
       setQuality(q)
       setAuditData(a)
       setLineageGraph(l)
+      setAgentStats(s)
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [])
@@ -484,6 +616,7 @@ function GovernanceTab() {
   const sections = [
     { id: 'quality', label: 'Data Quality', icon: CheckCircle2 },
     { id: 'audit', label: 'Audit Log', icon: Eye },
+    { id: 'agents', label: 'Agent Performance', icon: Cpu },
     { id: 'lineage', label: 'Lineage', icon: Share2 },
   ]
 
@@ -558,24 +691,78 @@ function GovernanceTab() {
             </div>
           ) : (
             <div className="space-y-2">
-              {auditData.map((entry, i) => (
-                <div key={i} className="bg-dark-700 border border-dark-600 rounded-xl p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-gray-200 truncate">{entry.question}</p>
-                      <div className="flex items-center gap-3 mt-1.5 text-[10px] font-mono text-gray-500">
-                        <span>{entry.rows} rows</span>
-                        <span>{entry.execution_time_ms}ms</span>
-                        <ConfidenceBadge level={entry.confidence} />
-                        {entry.trust_score && <TrustBadge score={entry.trust_score} />}
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-mono text-gray-600 shrink-0">{new Date(entry.timestamp).toLocaleTimeString()}</span>
-                  </div>
-                </div>
-              ))}
+              {auditData.map((entry, i) => <AuditEntryCard key={i} entry={entry} />)}
             </div>
           )}
+        </motion.div>
+      )}
+
+      {/* Agent Performance Section */}
+      {activeSection === 'agents' && agentStats && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { label: 'Total Queries', value: agentStats.total_queries, color: 'text-gray-100' },
+              { label: 'Avg Response', value: `${agentStats.avg_response_ms}ms`, color: 'text-cyan-400' },
+              { label: 'Success Rate', value: `${agentStats.success_rate}%`, color: 'text-emerald-400' },
+              { label: 'Avg Trust', value: agentStats.avg_trust_score, color: 'text-violet-400' },
+            ].map(card => (
+              <div key={card.label} className="bg-dark-700 border border-dark-600 rounded-xl p-4">
+                <span className="text-[10px] font-mono text-gray-500 uppercase">{card.label}</span>
+                <div className={`font-display text-2xl italic mt-1 ${card.color}`}>{card.value}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-dark-700 border border-dark-600 rounded-2xl p-5">
+            <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">
+              <Cpu size={14} className="text-violet-400" />
+              <span className="font-mono uppercase tracking-wider">Agent Response Time (avg)</span>
+            </div>
+            <div className="space-y-3">
+              {[
+                { key: 'sql', label: 'SQL Agent', icon: Database, color: 'cyan' },
+                { key: 'analysis', label: 'Analysis Agent', icon: Activity, color: 'violet' },
+                { key: 'narrative', label: 'Narrative Agent', icon: FileText, color: 'teal' },
+              ].map(agent => {
+                const ms = agentStats.agent_avg_ms[agent.key] || 0
+                const maxMs = Math.max(...Object.values(agentStats.agent_avg_ms), 1)
+                const pct = (ms / maxMs) * 100
+                const Icon = agent.icon
+                const barColors = { cyan: 'bg-cyan-400', violet: 'bg-violet-400', teal: 'bg-teal-400' }
+                const textColors = { cyan: 'text-cyan-400', violet: 'text-violet-400', teal: 'text-teal-400' }
+                return (
+                  <div key={agent.key} className="flex items-center gap-3">
+                    <Icon size={14} className={textColors[agent.color]} />
+                    <span className={`text-xs font-mono w-32 ${textColors[agent.color]}`}>{agent.label}</span>
+                    <div className="flex-1 h-3 bg-dark-800 rounded-full overflow-hidden">
+                      <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, delay: 0.2 }} className={`h-full ${barColors[agent.color]} rounded-full`} />
+                    </div>
+                    <span className="text-xs font-mono text-gray-400 w-16 text-right">{ms}ms</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="bg-dark-700 border border-dark-600 rounded-2xl p-5">
+            <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">
+              <Shield size={14} className="text-emerald-400" />
+              <span className="font-mono uppercase tracking-wider">Confidence Distribution</span>
+            </div>
+            <div className="flex items-center gap-4">
+              {['high', 'medium', 'low'].map(level => {
+                const count = agentStats.queries_by_confidence[level] || 0
+                const colors = { high: 'text-emerald-400 bg-emerald-400/10', medium: 'text-amber-400 bg-amber-400/10', low: 'text-rose-400 bg-rose-400/10' }
+                return (
+                  <div key={level} className={`flex-1 rounded-xl p-3 ${colors[level]} text-center`}>
+                    <div className="font-display text-2xl italic">{count}</div>
+                    <div className="text-[10px] font-mono uppercase mt-1">{level}</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
         </motion.div>
       )}
 
@@ -621,6 +808,77 @@ function GovernanceTab() {
         </motion.div>
       )}
     </div>
+  )
+}
+
+// ─── Agent Stepper (Animated Loading) ───
+
+function AgentStepper() {
+  const [activeStep, setActiveStep] = useState(0)
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setActiveStep(1), 1800)
+    const t2 = setTimeout(() => setActiveStep(2), 3600)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
+  }, [])
+
+  const steps = [
+    { icon: Database, label: 'SQL Agent', desc: 'Generating & executing query...', color: 'cyan' },
+    { icon: Activity, label: 'Analysis Agent', desc: 'Detecting trends & outliers...', color: 'violet' },
+    { icon: FileText, label: 'Narrative Agent', desc: 'Composing executive summary...', color: 'teal' },
+  ]
+
+  const colorMap = { cyan: 'text-cyan-400', violet: 'text-violet-400', teal: 'text-teal-400' }
+  const bgMap = { cyan: 'bg-cyan-400', violet: 'bg-violet-400', teal: 'bg-teal-400' }
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-dark-700 border border-dark-600 rounded-2xl p-5 max-w-md">
+      <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">
+        <Zap size={12} className="text-violet-400" />
+        <span className="font-mono uppercase tracking-wider">Multi-Agent Pipeline Active</span>
+      </div>
+      <div className="space-y-3">
+        {steps.map((step, i) => {
+          const Icon = step.icon
+          const isActive = i === activeStep
+          const isDone = i < activeStep
+          const isPending = i > activeStep
+          return (
+            <motion.div key={i} initial={{ opacity: 0.5 }} animate={{ opacity: isPending ? 0.35 : 1 }}
+              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 transition-all ${isActive ? 'bg-dark-600 border border-dark-600' : ''}`}>
+              <div className="relative">
+                <Icon size={16} className={isDone ? 'text-emerald-400' : isActive ? colorMap[step.color] : 'text-gray-600'} />
+                {isActive && (
+                  <motion.div className={`absolute -inset-1.5 rounded-full ${bgMap[step.color]} opacity-20`}
+                    animate={{ scale: [1, 1.5, 1], opacity: [0.2, 0.05, 0.2] }}
+                    transition={{ duration: 1.5, repeat: Infinity }} />
+                )}
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-mono font-semibold ${isDone ? 'text-emerald-400' : isActive ? colorMap[step.color] : 'text-gray-600'}`}>
+                    {step.label}
+                  </span>
+                  {isDone && <CheckCircle2 size={12} className="text-emerald-400" />}
+                  {isActive && (
+                    <div className="flex gap-0.5">
+                      {[0, 1, 2].map(j => (
+                        <motion.div key={j} className={`w-1 h-1 rounded-full ${bgMap[step.color]}`}
+                          animate={{ opacity: [0.3, 1, 0.3] }}
+                          transition={{ duration: 1, repeat: Infinity, delay: j * 0.2 }} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {(isActive || isDone) && (
+                  <span className="text-[10px] text-gray-500">{isDone ? 'Complete' : step.desc}</span>
+                )}
+              </div>
+            </motion.div>
+          )
+        })}
+      </div>
+    </motion.div>
   )
 }
 
@@ -706,21 +964,7 @@ function CopilotTab() {
             </div>
           ))}
 
-          {loading && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-3 bg-dark-700 border border-cyan-400/10 rounded-2xl px-5 py-4 max-w-sm">
-              <div className="flex gap-1">
-                {[0, 1, 2].map(i => <motion.div key={i} className="w-1.5 h-1.5 rounded-full bg-cyan-400" animate={{ opacity: [0.3, 1, 0.3] }} transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.2 }} />)}
-              </div>
-              <span className="text-xs text-gray-400">Agents analyzing...</span>
-              <div className="flex items-center gap-1 text-[10px] font-mono text-gray-600">
-                <Database size={10} className="text-cyan-400/50" />
-                <ArrowRight size={8} />
-                <Activity size={10} className="text-violet-400/50" />
-                <ArrowRight size={8} />
-                <FileText size={10} className="text-teal-400/50" />
-              </div>
-            </motion.div>
-          )}
+          {loading && <AgentStepper />}
           <div ref={bottomRef} />
         </div>
       </div>

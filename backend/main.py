@@ -122,6 +122,8 @@ TABLE data_lineage (id, table_name, source_system, refresh_frequency, last_refre
 RULES:
 - Always JOIN with business_units and/or service_lines to show readable names instead of IDs
 - Use period for time filtering. "Last quarter" means Q4 2025 (Oct-Dec). "This year" means 2025.
+- IMPORTANT: When asked about CURRENT or PRESENT values (e.g., "how many active projects do we have", "what is our headcount"), filter for the LATEST period only: WHERE mm.period = (SELECT MAX(period) FROM monthly_metrics). Do NOT sum across all months for point-in-time metrics like headcount, active_projects, nps_score, utilization_pct.
+- Metrics like revenue, pipeline, new_deals are cumulative and CAN be summed across periods when asking about totals.
 - When asked about trends, ORDER BY period ASC
 - Round monetary values to 2 decimal places
 - For aggregations across time, GROUP BY period and relevant dimensions
@@ -301,8 +303,10 @@ def agent_sql(question: str) -> tuple[str, list[dict]]:
     trace = []
     few_shot = get_few_shot_examples()
     system_prompt = SQL_AGENT_SYSTEM.replace("{few_shot}", few_shot)
+    known_tables = ['business_units', 'service_lines', 'monthly_metrics', 'projects', 'data_lineage']
 
     for attempt in range(1, 4):
+        step_start = time.time()
         trace.append({"agent": "sql", "attempt": attempt, "status": "generating"})
         try:
             response = client.chat.completions.create(
@@ -324,7 +328,22 @@ def agent_sql(question: str) -> tuple[str, list[dict]]:
 
             # Try execution
             data, columns = execute_sql(sql)
-            trace[-1].update({"status": "success", "sql": sql, "rows": len(data)})
+            duration = int((time.time() - step_start) * 1000)
+
+            # Build reasoning
+            tables_used = [t for t in known_tables if t in sql.lower()]
+            trace[-1].update({
+                "status": "success",
+                "sql": sql,
+                "rows": len(data),
+                "duration_ms": duration,
+                "tables_used": tables_used,
+                "reasoning": (
+                    f"Parsed natural language query and generated PostgreSQL "
+                    f"joining {len(tables_used)} table(s) ({', '.join(tables_used)}). "
+                    f"Query executed successfully on attempt {attempt}, returning {len(data)} rows."
+                ),
+            })
 
             # Cache successful query
             q_hash = hashlib.md5(question.lower().encode()).hexdigest()[:8]
@@ -332,7 +351,8 @@ def agent_sql(question: str) -> tuple[str, list[dict]]:
 
             return sql, trace
         except Exception as e:
-            trace[-1].update({"status": "error", "error": str(e)[:200]})
+            duration = int((time.time() - step_start) * 1000)
+            trace[-1].update({"status": "error", "error": str(e)[:200], "duration_ms": duration})
             if attempt == 3:
                 raise
 
@@ -341,6 +361,7 @@ def agent_sql(question: str) -> tuple[str, list[dict]]:
 
 def agent_analysis(question: str, data: list, columns: list) -> tuple[dict, list[dict]]:
     """Analysis Agent: Statistical analysis, trend/outlier detection."""
+    step_start = time.time()
     trace = [{"agent": "analysis", "status": "analyzing"}]
     sample = data[:30] if len(data) > 30 else data
 
@@ -362,15 +383,37 @@ def agent_analysis(question: str, data: list, columns: list) -> tuple[dict, list
         raw = response.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         analysis = json.loads(raw)
-        trace[0]["status"] = "success"
+        duration = int((time.time() - step_start) * 1000)
+
+        trace[0].update({
+            "status": "success",
+            "duration_ms": duration,
+            "findings": {
+                "trends_count": len(analysis.get("trends", [])),
+                "outliers_count": len(analysis.get("outliers", [])),
+                "risk_flags_count": len(analysis.get("risk_flags", [])),
+                "trends": analysis.get("trends", [])[:3],
+                "outliers": analysis.get("outliers", [])[:3],
+                "risk_flags": analysis.get("risk_flags", []),
+            },
+            "reasoning": (
+                f"Analyzed {len(data)} data points across {len(columns)} dimensions. "
+                f"Identified {len(analysis.get('trends', []))} trend(s), "
+                f"{len(analysis.get('outliers', []))} outlier(s), and "
+                f"{len(analysis.get('risk_flags', []))} risk flag(s)."
+            ),
+        })
         return analysis, trace
     except (json.JSONDecodeError, Exception) as e:
-        trace[0].update({"status": "partial", "error": str(e)[:100]})
+        duration = int((time.time() - step_start) * 1000)
+        trace[0].update({"status": "partial", "error": str(e)[:100], "duration_ms": duration,
+                         "reasoning": "Analysis completed with partial results."})
         return {"trends": [], "outliers": [], "comparisons": [], "statistics": {}, "risk_flags": []}, trace
 
 
 def agent_narrative(question: str, data: list, columns: list, analysis: dict) -> tuple[dict, list[dict]]:
     """Narrative Agent: Executive narrative with recommendations."""
+    step_start = time.time()
     trace = [{"agent": "narrative", "status": "generating"}]
     sample = data[:20] if len(data) > 20 else data
 
@@ -393,10 +436,24 @@ def agent_narrative(question: str, data: list, columns: list, analysis: dict) ->
         raw = response.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         result = json.loads(raw)
-        trace[0]["status"] = "success"
+        duration = int((time.time() - step_start) * 1000)
+
+        trace[0].update({
+            "status": "success",
+            "duration_ms": duration,
+            "chart_selected": result.get("chart_type", "table"),
+            "confidence": result.get("confidence", "medium"),
+            "reasoning": (
+                f"Synthesized executive narrative with {result.get('confidence', 'medium')} confidence. "
+                f"Selected '{result.get('chart_type', 'table')}' visualization. "
+                f"Generated {len(result.get('follow_ups', []))} follow-up suggestions."
+            ),
+        })
         return result, trace
     except (json.JSONDecodeError, Exception) as e:
-        trace[0].update({"status": "partial", "error": str(e)[:100]})
+        duration = int((time.time() - step_start) * 1000)
+        trace[0].update({"status": "partial", "error": str(e)[:100], "duration_ms": duration,
+                         "reasoning": "Narrative generated with fallback template."})
         return {
             "answer": "Analysis complete. See chart for details.",
             "insight": "",
@@ -494,7 +551,7 @@ def ask(req: QuestionRequest):
 
         elapsed = int((time.time() - start) * 1000)
 
-        # Audit log
+        # Audit log (enriched with agent breakdown)
         audit_log.append({
             "timestamp": datetime.now().isoformat(),
             "question": req.question,
@@ -504,6 +561,21 @@ def ask(req: QuestionRequest):
             "trust_score": trust,
             "execution_time_ms": elapsed,
             "agents": [t.get("agent") for t in all_trace],
+            "agent_breakdown": [
+                {
+                    "agent": t.get("agent"),
+                    "status": t.get("status"),
+                    "duration_ms": t.get("duration_ms", 0),
+                    "reasoning": t.get("reasoning", ""),
+                }
+                for t in all_trace
+                if t.get("status") in ("success", "partial")
+            ],
+            "analysis_summary": {
+                "trends": analysis.get("trends", [])[:3],
+                "risk_flags": analysis.get("risk_flags", []),
+                "outliers": analysis.get("outliers", [])[:2],
+            },
         })
 
         return CopilotResponse(
@@ -721,6 +793,48 @@ def governance_quality():
 def governance_audit(limit: int = 50):
     """Return recent query audit log."""
     return audit_log[-limit:][::-1]
+
+
+@app.get("/api/governance/agent-stats")
+def governance_agent_stats():
+    """Aggregate agent performance statistics."""
+    if not audit_log:
+        return {
+            "total_queries": 0,
+            "avg_response_ms": 0,
+            "success_rate": 100,
+            "agent_avg_ms": {"sql": 0, "analysis": 0, "narrative": 0},
+            "queries_by_confidence": {"high": 0, "medium": 0, "low": 0},
+            "avg_trust_score": 0,
+        }
+
+    total = len(audit_log)
+    avg_ms = sum(e.get("execution_time_ms", 0) for e in audit_log) // total
+
+    agent_times: dict[str, list] = {"sql": [], "analysis": [], "narrative": []}
+    for entry in audit_log:
+        for ab in entry.get("agent_breakdown", []):
+            name = ab.get("agent", "")
+            if name in agent_times:
+                agent_times[name].append(ab.get("duration_ms", 0))
+
+    agent_avg = {k: (int(sum(v) / len(v)) if v else 0) for k, v in agent_times.items()}
+
+    conf_dist = {"high": 0, "medium": 0, "low": 0}
+    for entry in audit_log:
+        c = entry.get("confidence", "medium")
+        conf_dist[c] = conf_dist.get(c, 0) + 1
+
+    successful = sum(1 for e in audit_log if e.get("trust_score", 0) > 50)
+
+    return {
+        "total_queries": total,
+        "avg_response_ms": avg_ms,
+        "success_rate": round((successful / total) * 100, 1) if total else 100,
+        "agent_avg_ms": agent_avg,
+        "queries_by_confidence": conf_dist,
+        "avg_trust_score": round(sum(e.get("trust_score", 0) for e in audit_log) / total, 1),
+    }
 
 
 @app.get("/api/governance/lineage-graph")
