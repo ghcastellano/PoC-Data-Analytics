@@ -130,8 +130,10 @@ RULES:
 - Always include ORDER BY for deterministic results
 - Limit results to 100 rows max
 - Return ONLY the SQL query, no explanation, no markdown formatting, no backticks
-- NEVER respond with conversational text. If the user says something like "hello" or "hi", generate a SQL query that shows a summary
-- Your output must ALWAYS start with SELECT, WITH, or another valid SQL keyword
+- NEVER respond with conversational text or a SELECT that returns a literal string message (e.g. SELECT 'not supported' AS message).
+- If the user asks something unrelated, off-topic, a greeting, or something you cannot map to a data query, ALWAYS fall back to this useful summary query:
+  SELECT bu.name AS business_unit, ROUND(SUM(mm.revenue)::numeric,2) AS total_revenue, ROUND(AVG(mm.utilization_pct)::numeric,1) AS avg_utilization, ROUND(AVG(mm.nps_score)::numeric,1) AS avg_nps FROM monthly_metrics mm JOIN business_units bu ON mm.business_unit_id=bu.id WHERE mm.period >= '2025-01-01' GROUP BY bu.name ORDER BY total_revenue DESC
+- Your output must ALWAYS be a valid SQL query that returns real data from the database tables. Never return a SELECT with only literal/hardcoded values.
 """
 
 # ─── Agent Prompts ───
@@ -328,6 +330,19 @@ def agent_sql(question: str) -> tuple[str, list[dict]]:
 
             # Try execution
             data, columns = execute_sql(sql)
+
+            # Detect non-data responses (e.g. SELECT 'message' AS message)
+            is_message_response = False
+            if len(data) == 1 and len(columns) <= 2:
+                values = list(data[0].values())
+                if any(isinstance(v, str) and len(v) > 30 and any(kw in v.lower() for kw in ["not supported", "cannot", "sorry", "please provide", "not related", "unable"]) for v in values):
+                    is_message_response = True
+
+            if is_message_response:
+                fallback_sql = "SELECT bu.name AS business_unit, ROUND(SUM(mm.revenue)::numeric,2) AS total_revenue, ROUND(AVG(mm.utilization_pct)::numeric,1) AS avg_utilization, ROUND(AVG(mm.nps_score)::numeric,1) AS avg_nps FROM monthly_metrics mm JOIN business_units bu ON mm.business_unit_id=bu.id WHERE mm.period >= '2025-01-01' GROUP BY bu.name ORDER BY total_revenue DESC"
+                data, columns = execute_sql(fallback_sql)
+                sql = fallback_sql
+
             duration = int((time.time() - step_start) * 1000)
 
             # Build reasoning
