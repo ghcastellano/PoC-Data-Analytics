@@ -266,21 +266,27 @@ function AgentPanel({ trace, response, isOpen, onToggle }) {
   )
 }
 
-// ─── Live Agent Stepper (SSE-driven) ───
+// ─── Agent Stepper (Timer-based, works on Vercel) ───
 
-function LiveAgentStepper({ streamEvents }) {
-  const agentState = {}
-  const agentOrder = ['sql', 'analysis', 'narrative']
+function AgentStepper() {
+  const [activeStep, setActiveStep] = useState(0)
+  const [elapsed, setElapsed] = useState(0)
 
-  for (const evt of streamEvents) {
-    if (evt.type === 'agent_start') agentState[evt.data.agent] = { status: 'active', ...evt.data }
-    if (evt.type === 'agent_complete') agentState[evt.data.agent] = { status: 'done', ...evt.data }
-  }
+  useEffect(() => {
+    const t1 = setTimeout(() => setActiveStep(1), 2200)
+    const t2 = setTimeout(() => setActiveStep(2), 4800)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
+  }, [])
+
+  useEffect(() => {
+    const interval = setInterval(() => setElapsed(e => e + 100), 100)
+    return () => clearInterval(interval)
+  }, [])
 
   const steps = [
-    { key: 'sql', icon: Database, label: 'SQL Agent', color: 'cyan' },
-    { key: 'analysis', icon: Activity, label: 'Analysis Agent', color: 'violet' },
-    { key: 'narrative', icon: FileText, label: 'Narrative Agent', color: 'teal' },
+    { icon: Database, label: 'SQL Agent', desc: 'Parsing question → generating PostgreSQL → executing against database...', color: 'cyan' },
+    { icon: Activity, label: 'Analysis Agent', desc: 'Detecting trends, outliers & risk flags across data dimensions...', color: 'violet' },
+    { icon: FileText, label: 'Narrative Agent', desc: 'Composing executive narrative with recommendations...', color: 'teal' },
   ]
 
   const colorMap = { cyan: 'text-cyan-400', violet: 'text-violet-400', teal: 'text-teal-400' }
@@ -288,20 +294,21 @@ function LiveAgentStepper({ streamEvents }) {
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-dark-700 border border-dark-600 rounded-2xl p-5 max-w-lg">
-      <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">
-        <Radio size={12} className="text-rose-400 animate-pulse" />
-        <span className="font-mono uppercase tracking-wider">Multi-Agent Pipeline — Live</span>
+      <div className="flex items-center justify-between text-xs text-gray-500 mb-4">
+        <div className="flex items-center gap-2">
+          <Radio size={12} className="text-rose-400 animate-pulse" />
+          <span className="font-mono uppercase tracking-wider">Multi-Agent Pipeline Active</span>
+        </div>
+        <span className="font-mono text-gray-600">{(elapsed / 1000).toFixed(1)}s</span>
       </div>
       <div className="space-y-2">
-        {steps.map((step) => {
-          const state = agentState[step.key]
-          const isDone = state?.status === 'done'
-          const isActive = state?.status === 'active'
-          const isPending = !state
+        {steps.map((step, i) => {
           const Icon = step.icon
-
+          const isActive = i === activeStep
+          const isDone = i < activeStep
+          const isPending = i > activeStep
           return (
-            <motion.div key={step.key} initial={{ opacity: 0.4 }} animate={{ opacity: isPending ? 0.3 : 1 }}
+            <motion.div key={i} initial={{ opacity: 0.4 }} animate={{ opacity: isPending ? 0.3 : 1 }}
               className={`rounded-xl px-4 py-3 transition-all ${isActive ? 'bg-dark-600 border border-dark-600' : isDone ? 'bg-dark-600/30' : ''}`}>
               <div className="flex items-center gap-3">
                 <div className="relative">
@@ -318,7 +325,6 @@ function LiveAgentStepper({ streamEvents }) {
                       {step.label}
                     </span>
                     {isDone && <CheckCircle2 size={12} className="text-emerald-400" />}
-                    {isDone && state.duration_ms && <span className="text-[10px] font-mono text-gray-500">{state.duration_ms}ms</span>}
                     {isActive && (
                       <div className="flex gap-0.5">
                         {[0, 1, 2].map(j => (
@@ -329,31 +335,8 @@ function LiveAgentStepper({ streamEvents }) {
                       </div>
                     )}
                   </div>
-                  {/* Live description from SSE */}
-                  {isActive && state.description && (
-                    <p className="text-[10px] text-gray-500 mt-0.5">{state.description}</p>
-                  )}
-                  {isDone && state.reasoning && (
-                    <p className="text-[10px] text-gray-500 mt-0.5 italic">{state.reasoning}</p>
-                  )}
-                  {/* SQL Agent: show preview */}
-                  {isDone && step.key === 'sql' && state.sql_preview && (
-                    <pre className="text-[9px] font-mono text-cyan-400/50 bg-dark-800 rounded px-2 py-1 mt-1 truncate max-w-md">{state.sql_preview}</pre>
-                  )}
-                  {/* Analysis Agent: show findings count */}
-                  {isDone && step.key === 'analysis' && state.findings && (
-                    <div className="flex items-center gap-3 mt-1 text-[10px]">
-                      {state.findings.trends_count > 0 && <span className="text-emerald-400">{state.findings.trends_count} trends</span>}
-                      {state.findings.outliers_count > 0 && <span className="text-amber-400">{state.findings.outliers_count} outliers</span>}
-                      {state.findings.risk_flags_count > 0 && <span className="text-rose-400">{state.findings.risk_flags_count} risks</span>}
-                    </div>
-                  )}
-                  {/* Narrative Agent: show confidence */}
-                  {isDone && step.key === 'narrative' && state.confidence && (
-                    <div className="flex items-center gap-2 mt-1">
-                      <ConfidenceBadge level={state.confidence} />
-                      {state.chart_type && <span className="text-[10px] text-teal-400/70 font-mono">{state.chart_type} chart</span>}
-                    </div>
+                  {(isActive || isDone) && (
+                    <span className="text-[10px] text-gray-500">{isDone ? 'Complete' : step.desc}</span>
                   )}
                 </div>
               </div>
@@ -796,9 +779,9 @@ function AuditEntryCard({ entry }) {
   )
 }
 
-function GovernanceTab() {
+function GovernanceTab({ clientAuditLog = [] }) {
   const [quality, setQuality] = useState(null)
-  const [auditData, setAuditData] = useState([])
+  const [serverAudit, setServerAudit] = useState([])
   const [lineageGraph, setLineageGraph] = useState(null)
   const [agentStats, setAgentStats] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -812,12 +795,47 @@ function GovernanceTab() {
       fetch(`${API}/api/governance/agent-stats`).then(r => r.json()),
     ]).then(([q, a, l, s]) => {
       setQuality(q)
-      setAuditData(a)
+      setServerAudit(a)
       setLineageGraph(l)
       setAgentStats(s)
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [])
+
+  // Merge server-side audit with client-side (deduplicate by timestamp)
+  const auditData = useMemo(() => {
+    const serverTimestamps = new Set(serverAudit.map(e => e.timestamp))
+    const uniqueClient = clientAuditLog.filter(e => !serverTimestamps.has(e.timestamp))
+    const merged = [...uniqueClient, ...serverAudit]
+    merged.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    return merged
+  }, [serverAudit, clientAuditLog])
+
+  // Compute agent stats from merged audit data (client + server)
+  const mergedAgentStats = useMemo(() => {
+    const allEntries = auditData
+    if (!allEntries.length) return agentStats
+    const total = allEntries.length
+    const avgMs = Math.round(allEntries.reduce((s, e) => s + (e.execution_time_ms || 0), 0) / total)
+    const agentTimes = { sql: [], analysis: [], narrative: [] }
+    for (const entry of allEntries) {
+      for (const ab of (entry.agent_breakdown || [])) {
+        if (ab.agent in agentTimes) agentTimes[ab.agent].push(ab.duration_ms || 0)
+      }
+    }
+    const agentAvg = Object.fromEntries(Object.entries(agentTimes).map(([k, v]) => [k, v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : 0]))
+    const confDist = { high: 0, medium: 0, low: 0 }
+    for (const e of allEntries) confDist[e.confidence || 'medium'] = (confDist[e.confidence || 'medium'] || 0) + 1
+    const successful = allEntries.filter(e => (e.trust_score || 0) > 50).length
+    return {
+      total_queries: total,
+      avg_response_ms: avgMs,
+      success_rate: total ? Math.round((successful / total) * 1000) / 10 : 100,
+      agent_avg_ms: agentAvg,
+      queries_by_confidence: confDist,
+      avg_trust_score: Math.round(allEntries.reduce((s, e) => s + (e.trust_score || 0), 0) / total * 10) / 10,
+    }
+  }, [auditData, agentStats])
 
   const sections = [
     { id: 'quality', label: 'Data Quality', icon: CheckCircle2 },
@@ -902,14 +920,14 @@ function GovernanceTab() {
       )}
 
       {/* Agent Performance Section */}
-      {activeSection === 'agents' && agentStats && (
+      {activeSection === 'agents' && mergedAgentStats && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {[
-              { label: 'Total Queries', value: agentStats.total_queries, color: 'text-gray-100' },
-              { label: 'Avg Response', value: `${agentStats.avg_response_ms}ms`, color: 'text-cyan-400' },
-              { label: 'Success Rate', value: `${agentStats.success_rate}%`, color: 'text-emerald-400' },
-              { label: 'Avg Trust', value: agentStats.avg_trust_score, color: 'text-violet-400' },
+              { label: 'Total Queries', value: mergedAgentStats.total_queries, color: 'text-gray-100' },
+              { label: 'Avg Response', value: `${mergedAgentStats.avg_response_ms}ms`, color: 'text-cyan-400' },
+              { label: 'Success Rate', value: `${mergedAgentStats.success_rate}%`, color: 'text-emerald-400' },
+              { label: 'Avg Trust', value: mergedAgentStats.avg_trust_score, color: 'text-violet-400' },
             ].map(card => (
               <div key={card.label} className="bg-dark-700 border border-dark-600 rounded-xl p-4">
                 <span className="text-[10px] font-mono text-gray-500 uppercase">{card.label}</span>
@@ -929,8 +947,8 @@ function GovernanceTab() {
                 { key: 'analysis', label: 'Analysis Agent', icon: Activity, color: 'violet' },
                 { key: 'narrative', label: 'Narrative Agent', icon: FileText, color: 'teal' },
               ].map(agent => {
-                const ms = agentStats.agent_avg_ms[agent.key] || 0
-                const maxMs = Math.max(...Object.values(agentStats.agent_avg_ms), 1)
+                const ms = mergedAgentStats.agent_avg_ms[agent.key] || 0
+                const maxMs = Math.max(...Object.values(mergedAgentStats.agent_avg_ms), 1)
                 const pct = (ms / maxMs) * 100
                 const Icon = agent.icon
                 const barColors = { cyan: 'bg-cyan-400', violet: 'bg-violet-400', teal: 'bg-teal-400' }
@@ -956,7 +974,7 @@ function GovernanceTab() {
             </div>
             <div className="flex items-center gap-4">
               {['high', 'medium', 'low'].map(level => {
-                const count = agentStats.queries_by_confidence[level] || 0
+                const count = mergedAgentStats.queries_by_confidence[level] || 0
                 const colors = { high: 'text-emerald-400 bg-emerald-400/10', medium: 'text-amber-400 bg-amber-400/10', low: 'text-rose-400 bg-rose-400/10' }
                 return (
                   <div key={level} className={`flex-1 rounded-xl p-3 ${colors[level]} text-center`}>
@@ -1017,11 +1035,10 @@ function GovernanceTab() {
 
 // ─── Copilot Chat Tab (SSE Streaming + Conversation Memory) ───
 
-function CopilotTab({ initialQuestion }) {
+function CopilotTab({ initialQuestion, onQueryComplete }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [streamEvents, setStreamEvents] = useState([])
   const [suggestions, setSuggestions] = useState([])
   const [conversationId, setConversationId] = useState(null)
   const [turnCount, setTurnCount] = useState(0)
@@ -1034,7 +1051,7 @@ function CopilotTab({ initialQuestion }) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, loading, streamEvents])
+  }, [messages, loading])
 
   // Handle initial question from Dashboard anomaly "Investigate" button
   useEffect(() => {
@@ -1050,84 +1067,53 @@ function CopilotTab({ initialQuestion }) {
     setInput('')
     setMessages(prev => [...prev, { type: 'user', text: q }])
     setLoading(true)
-    setStreamEvents([])
 
     const newTurn = turnCount + 1
     setTurnCount(newTurn)
 
     try {
-      // Try SSE streaming first
-      const res = await fetch(`${API}/api/ask/stream`, {
+      const res = await fetch(`${API}/api/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: q, conversation_id: conversationId }),
       })
-
       if (!res.ok) throw new Error(`Error ${res.status}`)
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let finalResult = null
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        let currentEventType = null
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEventType = line.slice(7).trim()
-          } else if (line.startsWith('data: ') && currentEventType) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (currentEventType === 'result') {
-                finalResult = data
-              } else if (currentEventType === 'error') {
-                throw new Error(data.detail || 'Pipeline error')
-              } else {
-                setStreamEvents(prev => [...prev, { type: currentEventType, data }])
-              }
-            } catch (e) {
-              if (e.message && !e.message.includes('JSON')) throw e
-            }
-            currentEventType = null
-          }
-        }
+      const data = await res.json()
+      if (data.conversation_id && !conversationId) {
+        setConversationId(data.conversation_id)
       }
+      setMessages(prev => [...prev, { type: 'response', data, turn: newTurn }])
 
-      if (finalResult) {
-        if (finalResult.conversation_id && !conversationId) {
-          setConversationId(finalResult.conversation_id)
-        }
-        setMessages(prev => [...prev, { type: 'response', data: finalResult, turn: newTurn }])
+      // Pass audit data to parent for Governance tab
+      if (onQueryComplete) {
+        onQueryComplete({
+          timestamp: data.timestamp,
+          question: q,
+          sql: data.sql,
+          rows: data.rows_returned,
+          confidence: data.confidence,
+          trust_score: data.trust_score,
+          execution_time_ms: data.execution_time_ms,
+          agents: ['sql', 'analysis', 'narrative'],
+          agent_breakdown: data.agent_trace?.filter(t => t.status === 'success' || t.status === 'partial').map(t => ({
+            agent: t.agent,
+            status: t.status,
+            duration_ms: t.duration_ms || 0,
+            reasoning: t.reasoning || '',
+          })) || [],
+          analysis_summary: {
+            trends: data.analysis?.trends?.slice(0, 3) || [],
+            risk_flags: data.analysis?.risk_flags || [],
+            outliers: data.analysis?.outliers?.slice(0, 2) || [],
+          },
+        })
       }
     } catch (err) {
-      // Fallback to non-streaming endpoint
-      try {
-        const res = await fetch(`${API}/api/ask`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: q, conversation_id: conversationId }),
-        })
-        if (!res.ok) throw new Error(`Error ${res.status}`)
-        const data = await res.json()
-        if (data.conversation_id && !conversationId) {
-          setConversationId(data.conversation_id)
-        }
-        setMessages(prev => [...prev, { type: 'response', data, turn: newTurn }])
-      } catch (fallbackErr) {
-        setMessages(prev => [...prev, { type: 'error', text: fallbackErr.message }])
-      }
+      setMessages(prev => [...prev, { type: 'error', text: err.message }])
     } finally {
       setLoading(false)
-      setStreamEvents([])
     }
-  }, [conversationId, turnCount])
+  }, [conversationId, turnCount, onQueryComplete])
 
   const empty = messages.length === 0 && !loading
 
@@ -1173,15 +1159,7 @@ function CopilotTab({ initialQuestion }) {
             </div>
           ))}
 
-          {loading && streamEvents.length > 0 && <LiveAgentStepper streamEvents={streamEvents} />}
-          {loading && streamEvents.length === 0 && (
-            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-dark-700 border border-dark-600 rounded-2xl p-5 max-w-lg">
-              <div className="flex items-center gap-2 text-xs text-gray-500">
-                <Radio size={12} className="text-rose-400 animate-pulse" />
-                <span className="font-mono uppercase tracking-wider">Connecting to agent pipeline...</span>
-              </div>
-            </motion.div>
-          )}
+          {loading && <AgentStepper />}
           <div ref={bottomRef} />
         </div>
       </div>
@@ -1254,6 +1232,7 @@ function SharedReportView({ shareId }) {
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [copilotInitialQuestion, setCopilotInitialQuestion] = useState(null)
+  const [clientAuditLog, setClientAuditLog] = useState([])
   const shareId = useMemo(() => new URLSearchParams(window.location.search).get('share'), [])
 
   if (shareId) return <SharedReportView shareId={shareId} />
@@ -1261,6 +1240,10 @@ export default function App() {
   function handleNavigateToCopilot(question) {
     setCopilotInitialQuestion(question)
     setActiveTab('copilot')
+  }
+
+  function handleQueryComplete(auditEntry) {
+    setClientAuditLog(prev => [auditEntry, ...prev])
   }
 
   return (
@@ -1302,8 +1285,8 @@ export default function App() {
         <div className="max-w-5xl mx-auto">
           <AnimatePresence mode="wait">
             {activeTab === 'dashboard' && <motion.div key="dashboard" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}><DashboardTab onNavigateToCopilot={handleNavigateToCopilot} /></motion.div>}
-            {activeTab === 'copilot' && <motion.div key="copilot" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="h-[calc(100vh-10rem)]"><CopilotTab initialQuestion={copilotInitialQuestion} /></motion.div>}
-            {activeTab === 'governance' && <motion.div key="governance" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}><GovernanceTab /></motion.div>}
+            {activeTab === 'copilot' && <motion.div key="copilot" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="h-[calc(100vh-10rem)]"><CopilotTab initialQuestion={copilotInitialQuestion} onQueryComplete={handleQueryComplete} /></motion.div>}
+            {activeTab === 'governance' && <motion.div key="governance" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}><GovernanceTab clientAuditLog={clientAuditLog} /></motion.div>}
           </AnimatePresence>
         </div>
       </main>
