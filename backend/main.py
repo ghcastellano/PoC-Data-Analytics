@@ -68,6 +68,8 @@ RULES:
 - Always include ORDER BY for deterministic results
 - Limit results to 100 rows max
 - Return ONLY the SQL query, no explanation, no markdown formatting, no backticks
+- NEVER respond with conversational text. If the user says something like "hello" or "hi", generate a SQL query that shows a summary (e.g., total revenue by business unit for the latest period)
+- Your output must ALWAYS start with SELECT, WITH, or another valid SQL keyword
 """
 
 ANSWER_SYSTEM = """
@@ -194,6 +196,17 @@ def generate_sql(question: str) -> str:
     sql = response.choices[0].message.content.strip()
     # Clean up any markdown formatting
     sql = sql.replace("```sql", "").replace("```", "").strip()
+    # Validate that the response looks like SQL
+    sql_upper = sql.upper().lstrip()
+    valid_starts = ("SELECT", "WITH", "INSERT", "UPDATE", "DELETE", "EXPLAIN")
+    if not sql_upper.startswith(valid_starts):
+        # GPT returned conversational text instead of SQL — use a fallback query
+        sql = """SELECT bu.name AS business_unit, ROUND(SUM(mm.revenue)::numeric, 2) AS total_revenue,
+                 ROUND(AVG(mm.margin_pct)::numeric, 2) AS avg_margin
+                 FROM monthly_metrics mm
+                 JOIN business_units bu ON mm.business_unit_id = bu.id
+                 WHERE mm.period >= '2025-10-01'
+                 GROUP BY bu.name ORDER BY total_revenue DESC"""
     return sql
 
 
