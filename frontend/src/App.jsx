@@ -526,7 +526,10 @@ function KpiCard({ kpi }) {
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-dark-700 border border-dark-600 rounded-2xl p-5 hover:border-dark-600/80 transition-colors">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-mono text-gray-500 uppercase tracking-wider">{kpi.display_name}</span>
+        <div>
+          <span className="text-xs font-mono text-gray-500 uppercase tracking-wider">{kpi.display_name}</span>
+          <span className="ml-2 text-[9px] font-mono text-gray-600 bg-dark-600 px-1.5 py-0.5 rounded-full">Avg · All BUs</span>
+        </div>
         {statusIcon[kpi.status]}
       </div>
       <div className="flex items-end justify-between">
